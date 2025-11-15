@@ -1,0 +1,35 @@
+# Exit Gate Configuration File
+# Default configuration for the application firewall daemon
+
+[daemon]
+# Unix socket path for IPC communication
+socket_path = "/var/run/exit-gate/exit-gate.sock"
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# Path to eBPF programs
+bpf_path = "/usr/local/lib/exit-gate/bpf"
+
+[notifications]
+# Timeout for connection prompts (seconds)
+# After this timeout, the default action will be applied
+timeout_seconds = 30
+
+# Default action when timeout expires: allow or deny
+default_action = "deny"
+
+# Monitor outbound connections (recommended)
+monitor_outbound = true
+
+# Monitor inbound connections (server applications)
+# Warning: This can generate many prompts for web servers, etc.
+monitor_inbound = false
+
+[database]
+# Path to SQLite database for rules and history
+db_path = "/var/lib/exit-gate/rules.db"
+
+# Maximum number of connection history entries to keep
+# Older entries will be automatically cleaned up
+max_history_entries = 10000
