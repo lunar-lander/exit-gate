@@ -1,17 +1,101 @@
 #include <linux/bpf.h>
-#include <linux/pkt_cls.h>
-#include <linux/if_ether.h>
-#include <linux/ip.h>
-#include <linux/ipv6.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
-#include <linux/in.h>
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_endian.h>
-#include <bpf/bpf_tracing.h>
+#include <linux/types.h>
+#include <linux/ptrace.h>
 
+/* BPF helper function declarations */
+static void *(*bpf_map_lookup_elem)(void *map, const void *key) = (void *) 1;
+static long (*bpf_map_update_elem)(void *map, const void *key, const void *value, __u64 flags) = (void *) 2;
+static long (*bpf_probe_read_kernel)(void *dst, __u32 size, const void *unsafe_ptr) = (void *) 113;
+static __u64 (*bpf_ktime_get_ns)(void) = (void *) 5;
+static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) = (void *) 16;
+static __u64 (*bpf_get_current_pid_tgid)(void) = (void *) 14;
+static __u64 (*bpf_get_current_uid_gid)(void) = (void *) 15;
+static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) = (void *) 131;
+static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *) 132;
+
+/* License */
+char _license[] __attribute__((section("license"), used)) = "GPL";
+
+/* Helper macros */
+#define SEC(name) __attribute__((section(name), used))
+#define __uint(name, val) int(*name)[val]
+#define __type(name, val) typeof(val) *name
+
+/* Architecture-specific register access */
+#if defined(__x86_64__)
+#define PT_REGS_PARM1(x) ((x)->rdi)
+#define PT_REGS_PARM2(x) ((x)->rsi)
+#define PT_REGS_PARM3(x) ((x)->rdx)
+#define PT_REGS_RC(x) ((x)->rax)
+#elif defined(__aarch64__)
+#define PT_REGS_PARM1(x) ((x)->regs[0])
+#define PT_REGS_PARM2(x) ((x)->regs[1])
+#define PT_REGS_PARM3(x) ((x)->regs[2])
+#define PT_REGS_RC(x) ((x)->regs[0])
+#endif
+
+/* Byte order helpers */
+#define bpf_ntohs(x) __builtin_bswap16(x)
+#define bpf_ntohl(x) __builtin_bswap32(x)
+
+/* Type definitions */
+typedef __u16 __be16;
+typedef __u32 __be32;
+
+struct in_addr {
+    __be32 s_addr;
+};
+
+struct in6_addr {
+    union {
+        __u8 u6_addr8[16];
+        __be32 u6_addr32[4];
+    } in6_u;
+};
+
+/* Minimal sock structure for eBPF */
+struct sock_common {
+    union {
+        struct {
+            __be32 skc_daddr;
+            __be32 skc_rcv_saddr;
+        };
+    };
+    union {
+        struct {
+            __be16 skc_dport;
+            __u16 skc_num;
+        };
+    };
+    short unsigned int skc_family;
+    struct in6_addr skc_v6_daddr;
+    struct in6_addr skc_v6_rcv_saddr;
+};
+
+struct sock {
+    struct sock_common __sk_common;
+};
+
+struct msghdr {
+    void *msg_name;
+    int msg_namelen;
+};
+
+struct sockaddr_in {
+    __be16 sin_port;
+    struct in_addr sin_addr;
+};
+
+struct sockaddr_in6 {
+    __be16 sin6_port;
+    struct in6_addr sin6_addr;
+};
+
+/* Constants */
 #define AF_INET 2
 #define AF_INET6 10
+#define IPPROTO_TCP 6
+#define IPPROTO_UDP 17
 #define MAX_ENTRIES 10240
 
 /* Event types */
@@ -43,7 +127,7 @@ struct connection_event {
         __u32 daddr_v4;
         __u8 daddr_v6[16];
     };
-    char comm[16]; /* Process name */
+    char comm[16];
     __u64 timestamp;
 };
 
@@ -59,14 +143,14 @@ struct conn_key {
 
 /* Connection verdict entry */
 struct conn_verdict {
-    __u8 verdict;  /* VERDICT_ALLOW or VERDICT_DENY */
+    __u8 verdict;
     __u64 timestamp;
 };
 
-/* Maps */
+/* BPF Maps */
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024); /* 256 KB ring buffer */
+    __uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
 struct {
@@ -79,29 +163,18 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, __u32); /* PID */
-    __type(value, __u64); /* Timestamp of last update */
+    __type(key, __u32);
+    __type(value, __u64);
 } process_cache SEC(".maps");
-
-/* Helper to get connection verdict */
-static __always_inline int get_verdict(struct conn_key *key)
-{
-    struct conn_verdict *verdict = bpf_map_lookup_elem(&verdicts, key);
-    if (verdict) {
-        return verdict->verdict;
-    }
-    return VERDICT_PENDING;
-}
 
 /* kprobe for tcp_connect */
 SEC("kprobe/tcp_connect")
-int BPF_KPROBE(kprobe_tcp_connect, struct sock *sk)
+int kprobe_tcp_connect(struct pt_regs *ctx)
 {
+    struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
     struct connection_event *event;
-    struct conn_key key = {};
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
-    __u32 tid = (__u32)pid_tgid;
     __u64 uid_gid = bpf_get_current_uid_gid();
 
     /* Reserve space in ring buffer */
@@ -111,7 +184,7 @@ int BPF_KPROBE(kprobe_tcp_connect, struct sock *sk)
 
     /* Fill in process information */
     event->pid = pid;
-    event->tid = tid;
+    event->tid = (__u32)pid_tgid;
     event->uid = (__u32)uid_gid;
     event->gid = uid_gid >> 32;
     event->event_type = EVENT_TCP_CONNECT;
@@ -135,14 +208,6 @@ int BPF_KPROBE(kprobe_tcp_connect, struct sock *sk)
         bpf_probe_read_kernel(&event->dport, sizeof(event->dport),
                              &sk->__sk_common.skc_dport);
         event->dport = bpf_ntohs(event->dport);
-
-        /* Prepare key for verdict lookup */
-        key.pid = pid;
-        key.saddr = event->saddr_v4;
-        key.daddr = event->daddr_v4;
-        key.sport = event->sport;
-        key.dport = event->dport;
-        key.protocol = IPPROTO_TCP;
     } else if (family == AF_INET6) {
         bpf_probe_read_kernel(&event->saddr_v6, sizeof(event->saddr_v6),
                              &sk->__sk_common.skc_v6_rcv_saddr);
@@ -163,12 +228,13 @@ int BPF_KPROBE(kprobe_tcp_connect, struct sock *sk)
 
 /* kprobe for udp_sendmsg */
 SEC("kprobe/udp_sendmsg")
-int BPF_KPROBE(kprobe_udp_sendmsg, struct sock *sk, struct msghdr *msg, size_t len)
+int kprobe_udp_sendmsg(struct pt_regs *ctx)
 {
+    struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
+    struct msghdr *msg = (struct msghdr *)PT_REGS_PARM2(ctx);
     struct connection_event *event;
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
-    __u32 tid = (__u32)pid_tgid;
     __u64 uid_gid = bpf_get_current_uid_gid();
 
     /* Reserve space in ring buffer */
@@ -178,7 +244,7 @@ int BPF_KPROBE(kprobe_udp_sendmsg, struct sock *sk, struct msghdr *msg, size_t l
 
     /* Fill in process information */
     event->pid = pid;
-    event->tid = tid;
+    event->tid = (__u32)pid_tgid;
     event->uid = (__u32)uid_gid;
     event->gid = uid_gid >> 32;
     event->event_type = EVENT_UDP_SEND;
@@ -196,7 +262,7 @@ int BPF_KPROBE(kprobe_udp_sendmsg, struct sock *sk, struct msghdr *msg, size_t l
         bpf_probe_read_kernel(&event->saddr_v4, sizeof(event->saddr_v4),
                              &sk->__sk_common.skc_rcv_saddr);
 
-        /* For UDP, we need to read destination from msghdr */
+        /* For UDP, read destination from msghdr */
         struct sockaddr_in *addr;
         bpf_probe_read_kernel(&addr, sizeof(addr), &msg->msg_name);
         if (addr) {
@@ -234,15 +300,18 @@ int BPF_KPROBE(kprobe_udp_sendmsg, struct sock *sk, struct msghdr *msg, size_t l
     return 0;
 }
 
-/* kprobe for inet_csk_accept (TCP accept) */
-SEC("kprobe/inet_csk_accept")
-int BPF_KPROBE(kprobe_tcp_accept, struct sock *sk)
+/* kretprobe for inet_csk_accept (TCP accept) */
+SEC("kretprobe/inet_csk_accept")
+int kprobe_tcp_accept(struct pt_regs *ctx)
 {
+    struct sock *sk = (struct sock *)PT_REGS_RC(ctx);
     struct connection_event *event;
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
-    __u32 tid = (__u32)pid_tgid;
     __u64 uid_gid = bpf_get_current_uid_gid();
+
+    if (!sk)
+        return 0;
 
     /* Reserve space in ring buffer */
     event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
@@ -251,7 +320,7 @@ int BPF_KPROBE(kprobe_tcp_accept, struct sock *sk)
 
     /* Fill in process information */
     event->pid = pid;
-    event->tid = tid;
+    event->tid = (__u32)pid_tgid;
     event->uid = (__u32)uid_gid;
     event->gid = uid_gid >> 32;
     event->event_type = EVENT_TCP_ACCEPT;
@@ -292,5 +361,3 @@ int BPF_KPROBE(kprobe_tcp_accept, struct sock *sk)
 
     return 0;
 }
-
-char LICENSE[] SEC("license") = "GPL";
