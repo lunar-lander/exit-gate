@@ -1,4 +1,4 @@
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{SqlitePool, sqlite::SqlitePoolOptions, Row};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use crate::rule::{Rule, Action, Duration, RuleCriteria};

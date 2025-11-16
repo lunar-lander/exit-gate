@@ -34,8 +34,8 @@ impl ProcessInfo {
         let status = process.status()
             .context("Failed to read process status")?;
 
-        let uid = status.ruid.unwrap_or(0);
-        let gid = status.rgid.unwrap_or(0);
+        let uid = status.ruid;
+        let gid = status.rgid;
 
         Ok(Self {
             pid,
@@ -89,10 +89,9 @@ pub fn find_listening_ports() -> Result<Vec<(u16, u32)>> {
 
     for entry in tcp.into_iter().chain(tcp6.into_iter()) {
         if entry.state == procfs::net::TcpState::Listen {
-            if let Some(inode) = entry.inode {
-                if let Ok(pid) = find_pid_by_socket_inode(inode) {
-                    ports.push((entry.local_address.port(), pid));
-                }
+            let inode = entry.inode;
+            if let Ok(pid) = find_pid_by_socket_inode(inode) {
+                ports.push((entry.local_address.port(), pid));
             }
         }
     }

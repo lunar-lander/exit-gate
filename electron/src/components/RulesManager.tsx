@@ -30,7 +30,6 @@ import {
   Delete,
   CheckCircle,
   Block,
-  Visibility,
 } from '@mui/icons-material';
 import { Rule, RuleCriteria } from '../types';
 

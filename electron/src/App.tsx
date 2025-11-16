@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   ThemeProvider,
   createTheme,
@@ -10,7 +10,6 @@ import {
   Tabs,
   Tab,
   Container,
-  Paper,
 } from '@mui/material';
 import { Shield } from '@mui/icons-material';
 import Dashboard from './components/Dashboard';
@@ -67,12 +66,12 @@ function App() {
           break;
 
         case 'ConnectionPrompt':
-          setConnectionPrompts((prev) => [...prev, message as ConnectionPromptType]);
+          setConnectionPrompts((prev) => [...prev, message as unknown as ConnectionPromptType]);
           break;
 
         case 'ConnectionEvent':
           // Add to history
-          setHistory((prev) => [message, ...prev].slice(0, 100));
+          setHistory((prev) => [message as unknown as HistoryEntry, ...prev].slice(0, 100));
           break;
 
         case 'Success':

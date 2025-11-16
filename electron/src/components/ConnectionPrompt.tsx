@@ -22,7 +22,6 @@ import {
   CheckCircle,
   Computer,
   Language,
-  ArrowForward,
 } from '@mui/icons-material';
 import { ConnectionPrompt as ConnectionPromptType } from '../types';
 

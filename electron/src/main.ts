@@ -110,7 +110,7 @@ function showConnectionPrompt(data: any) {
 }
 
 // IPC handlers
-ipcMain.handle('send-to-daemon', async (event, message) => {
+ipcMain.handle('send-to-daemon', async (_event, message) => {
   sendToDaemon(message);
   return { success: true };
 });
@@ -119,19 +119,19 @@ ipcMain.handle('get-rules', async () => {
   sendToDaemon({ type: 'GetRules' });
 });
 
-ipcMain.handle('add-rule', async (event, rule) => {
+ipcMain.handle('add-rule', async (_event, rule) => {
   sendToDaemon({ type: 'AddRule', rule });
 });
 
-ipcMain.handle('update-rule', async (event, rule) => {
+ipcMain.handle('update-rule', async (_event, rule) => {
   sendToDaemon({ type: 'UpdateRule', rule });
 });
 
-ipcMain.handle('delete-rule', async (event, ruleId) => {
+ipcMain.handle('delete-rule', async (_event, ruleId) => {
   sendToDaemon({ type: 'DeleteRule', rule_id: ruleId });
 });
 
-ipcMain.handle('get-history', async (event, limit) => {
+ipcMain.handle('get-history', async (_event, limit) => {
   sendToDaemon({ type: 'GetHistory', limit: limit || 100 });
 });
 
@@ -139,7 +139,7 @@ ipcMain.handle('get-stats', async () => {
   sendToDaemon({ type: 'GetStats' });
 });
 
-ipcMain.handle('respond-to-prompt', async (event, promptId, action, remember, duration) => {
+ipcMain.handle('respond-to-prompt', async (_event, promptId, action, remember, duration) => {
   sendToDaemon({
     type: 'RespondToPrompt',
     prompt_id: promptId,

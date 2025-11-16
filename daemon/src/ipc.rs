@@ -86,13 +86,13 @@ impl IpcServer {
         }
 
         let tx = self.tx.clone();
-        let socket_path = self.socket_path.clone();
+        let _socket_path = self.socket_path.clone();
 
         // Spawn task to handle outgoing messages
         tokio::spawn(async move {
             let mut clients: Vec<UnixStream> = Vec::new();
 
-            while let Some((client_id, msg)) = rx.recv().await {
+            while let Some((_client_id, msg)) = rx.recv().await {
                 // Broadcast to all connected clients
                 let json = match serde_json::to_string(&msg) {
                     Ok(j) => j,
