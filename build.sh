@@ -1,6 +1,19 @@
 #!/bin/bash
 set -e
 
+# Check if running as root
+if [ "$EUID" -eq 0 ]; then
+    echo "⚠ WARNING: Running build as root is not recommended!"
+    echo "⚠ Please run this script as a regular user."
+    echo "⚠ Only installation requires sudo (./install.sh)"
+    echo ""
+    read -p "Continue anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
 echo "==================================="
 echo "Exit Gate Build Script"
 echo "==================================="
@@ -48,6 +61,7 @@ echo "  - eBPF programs: ebpf/*.o"
 echo "  - Daemon: daemon/target/release/exit-gate-daemon"
 echo "  - Electron app: electron/dist/"
 echo ""
-echo "To install, run:"
-echo "  sudo ./install.sh"
+echo "Next steps:"
+echo "  1. Package Electron app: ./package.sh"
+echo "  2. Install daemon:       sudo ./install.sh"
 echo ""

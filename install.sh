@@ -12,58 +12,22 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Check for required dependencies
-echo "Checking dependencies..."
+# Check for pre-built artifacts
+echo "Checking for build artifacts..."
 
-command -v cargo >/dev/null 2>&1 || {
-    echo "Error: Rust/Cargo is not installed. Please install Rust first:"
-    echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+if [ ! -f "ebpf/network_monitor.bpf.o" ]; then
+    echo "Error: eBPF programs not built!"
+    echo "Please run: ./build.sh"
     exit 1
-}
-
-command -v node >/dev/null 2>&1 || {
-    echo "Error: Node.js is not installed. Please install Node.js 18+ first."
-    exit 1
-}
-
-command -v clang >/dev/null 2>&1 || {
-    echo "Error: Clang is not installed. Please install it:"
-    echo "  Ubuntu/Debian: apt install clang llvm libelf-dev libbpf-dev"
-    echo "  Fedora: dnf install clang llvm elfutils-libelf-devel libbpf-devel"
-    exit 1
-}
-
-echo "✓ All dependencies found"
-echo ""
-
-# Build eBPF programs
-echo "Building eBPF programs..."
-cd ebpf
-make clean
-make
-cd ..
-echo "✓ eBPF programs built"
-echo ""
-
-# Build Rust daemon
-echo "Building daemon..."
-cd daemon
-cargo build --release
-cd ..
-echo "✓ Daemon built"
-echo ""
-
-# Build Electron app
-echo "Building Electron application..."
-cd electron
-if [ ! -d "node_modules" ]; then
-    echo "Installing npm dependencies..."
-    npm install
 fi
-npm run build
-npm run package:linux
-cd ..
-echo "✓ Electron app packaged"
+
+if [ ! -f "daemon/target/release/exit-gate-daemon" ]; then
+    echo "Error: Daemon not built!"
+    echo "Please run: ./build.sh"
+    exit 1
+fi
+
+echo "✓ Build artifacts found"
 echo ""
 
 # Install files
@@ -128,8 +92,10 @@ echo ""
 echo "5. View logs:"
 echo "   sudo journalctl -u exit-gate -f"
 echo ""
-echo "6. Install the Electron GUI:"
-echo "   AppImage: electron/dist/Exit Gate-0.1.0.AppImage"
-echo "   Debian:   sudo dpkg -i electron/dist/exit-gate_0.1.0_amd64.deb"
+echo "6. Run the Electron GUI:"
+echo "   AppImage: ./electron/dist/Exit Gate-0.1.0.AppImage"
+echo "   Or install .deb: sudo dpkg -i electron/dist/exit-gate_0.1.0_amd64.deb"
+echo ""
+echo "Note: If you haven't packaged the GUI yet, run: ./package.sh"
 echo ""
 echo "==================================="

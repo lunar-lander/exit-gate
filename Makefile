@@ -1,9 +1,12 @@
-.PHONY: all build clean install uninstall daemon ebpf electron
+.PHONY: all build package clean install uninstall daemon ebpf electron
 
 all: build
 
 build:
 	@./build.sh
+
+package:
+	@./package.sh
 
 ebpf:
 	@echo "Building eBPF programs..."
@@ -42,13 +45,19 @@ help:
 	@echo "Exit Gate - Linux Application Firewall"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  make build       - Build all components"
+	@echo "  make build       - Build all components (run as regular user)"
+	@echo "  make package     - Package Electron app (run as regular user)"
 	@echo "  make ebpf        - Build eBPF programs only"
 	@echo "  make daemon      - Build daemon only"
 	@echo "  make electron    - Build Electron app only"
-	@echo "  make install     - Install Exit Gate (requires root)"
-	@echo "  make uninstall   - Uninstall Exit Gate (requires root)"
+	@echo "  make install     - Install daemon (requires root)"
+	@echo "  make uninstall   - Uninstall daemon (requires root)"
 	@echo "  make clean       - Remove build artifacts"
-	@echo "  make dev-daemon  - Run daemon in debug mode"
+	@echo "  make dev-daemon  - Run daemon in debug mode (requires root)"
 	@echo "  make dev-electron - Run Electron app in dev mode"
 	@echo "  make help        - Show this help message"
+	@echo ""
+	@echo "Typical workflow:"
+	@echo "  1. make build    (as regular user)"
+	@echo "  2. make package  (as regular user)"
+	@echo "  3. make install  (as root/sudo)"

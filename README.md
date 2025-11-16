@@ -1,189 +1,264 @@
-# Exit Gate - Linux Application Firewall
+# Exit Gate
 
-An elaborate OpenSnitch-like application firewall for Linux with eBPF-based network monitoring.
+**Linux Application Firewall with eBPF**
+
+Exit Gate is an elaborate OpenSnitch-like application firewall for Linux that uses eBPF for kernel-level network monitoring, Rust for the daemon backend, and Electron for the desktop GUI.
 
 ## Features
 
-- **Real-time Network Monitoring**: Uses eBPF to monitor all network connections at the kernel level
-- **Interactive Connection Prompts**: Pop-up dialogs for allowing/denying connections
-- **Rule Engine**: Create persistent rules to automatically allow/deny connections
-- **Process Detection**: Identifies which process is making each connection
-- **Connection History**: View and analyze past connection attempts
-- **Statistics Dashboard**: Real-time network activity visualization
-- **Low Overhead**: eBPF provides high performance with minimal system impact
+- **eBPF-based monitoring**: Kernel-level network connection tracking
+- **Interactive prompts**: Allow/deny connection requests in real-time
+- **Rule engine**: Priority-based rules with multiple criteria (process, port, domain, user)
+- **Modern GUI**: React + Material-UI desktop application
+- **SQLite database**: Persistent rules and connection history
+- **Process tracking**: Identify applications making network connections
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│     Electron GUI (React)            │
-│  - Connection Prompts               │
-│  - Rule Management                  │
-│  - Statistics Dashboard             │
-└──────────────┬──────────────────────┘
-               │ Unix Socket IPC
-┌──────────────┴──────────────────────┐
-│     Rust Daemon                     │
-│  - Rule Engine                      │
-│  - SQLite Storage                   │
-│  - Process Information              │
-└──────────────┬──────────────────────┘
-               │ libbpf-rs
-┌──────────────┴──────────────────────┐
-│     eBPF Programs (C)               │
-│  - TCP Connect Hook                 │
-│  - UDP Send Hook                    │
-│  - Connection Tracking              │
-└─────────────────────────────────────┘
+┌─────────────────┐
+│  Electron GUI   │  (React + TypeScript + Material-UI)
+└────────┬────────┘
+         │ Unix Socket (JSON IPC)
+┌────────┴────────┐
+│  Rust Daemon    │  (Tokio + SQLite + Rule Engine)
+└────────┬────────┘
+         │ Ring Buffer
+┌────────┴────────┐
+│  eBPF Programs  │  (Kernel probes on tcp_connect/accept)
+└─────────────────┘
 ```
 
-## Components
+## Prerequisites
 
-### 1. eBPF Programs (`/ebpf`)
-- Written in C, compiled to eBPF bytecode
-- Hooks into kernel network functions
-- Collects connection metadata (PID, dest IP, port, etc.)
+### Build Dependencies
+- **Rust** 1.70+ with Cargo
+- **Node.js** 18+ with npm
+- **Clang/LLVM** for eBPF compilation
+- **Linux headers** for eBPF
 
-### 2. Rust Daemon (`/daemon`)
-- Loads and manages eBPF programs
-- Enforces firewall rules
-- Communicates with Electron GUI via Unix sockets
-- Stores rules and history in SQLite
+#### Ubuntu/Debian
+```bash
+sudo apt install clang llvm linux-headers-$(uname -r)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install nodejs
+```
 
-### 3. Electron Application (`/electron`)
-- Modern React-based UI
-- Real-time connection notifications
-- Rule management interface
-- Statistics and monitoring dashboard
+#### Fedora/RHEL
+```bash
+sudo dnf install clang llvm kernel-devel
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+sudo dnf install nodejs
+```
 
-## Requirements
+### Runtime Dependencies
+- **Linux kernel** 5.8+ (for eBPF support)
+- **CAP_BPF** or root privileges (daemon only)
 
-- Linux kernel 5.8+ (for eBPF features)
-- Rust 1.70+
-- Node.js 18+
-- Clang/LLVM (for eBPF compilation)
-- libbpf development files
+## Building
+
+**⚠️ IMPORTANT: Build as regular user, NOT as root!**
+
+```bash
+# 1. Build all components (eBPF, Rust daemon, Electron app)
+make build
+
+# 2. Package the Electron GUI (creates AppImage and .deb)
+make package
+
+# 3. Install the daemon (requires root)
+sudo make install
+```
+
+Or use individual scripts:
+```bash
+./build.sh      # Build (as regular user)
+./package.sh    # Package GUI (as regular user)
+sudo ./install.sh   # Install daemon (as root)
+```
+
+### Build Artifacts
+
+After building:
+- **eBPF programs**: `ebpf/network_monitor.bpf.o` (13 KB)
+- **Daemon**: `daemon/target/release/exit-gate-daemon` (6 MB)
+- **Electron web**: `electron/dist/` (800 KB)
+
+After packaging:
+- **AppImage**: `electron/dist/Exit Gate-0.1.0.AppImage` (429 MB)
+- **Debian package**: `electron/dist/exit-gate_0.1.0_amd64.deb` (357 MB)
 
 ## Installation
 
-### Install Dependencies
-
-**Ubuntu/Debian:**
+### Daemon Installation
 ```bash
-sudo apt install -y clang llvm libelf-dev libbpf-dev linux-headers-$(uname -r) build-essential pkg-config
+sudo ./install.sh
 ```
 
-**Fedora/RHEL:**
+This installs:
+- `/usr/local/bin/exit-gate-daemon` - Main daemon
+- `/usr/local/lib/exit-gate/bpf/*.o` - eBPF programs
+- `/etc/exit-gate/config.toml` - Configuration
+- `/etc/systemd/system/exit-gate.service` - Systemd service
+
+### GUI Installation
+
+**Option 1: AppImage (recommended)**
 ```bash
-sudo dnf install -y clang llvm elfutils-libelf-devel libbpf-devel kernel-devel
+# Make executable and run
+chmod +x electron/dist/Exit\ Gate-0.1.0.AppImage
+./electron/dist/Exit\ Gate-0.1.0.AppImage
 ```
 
-### Build the Daemon
-
+**Option 2: Debian package**
 ```bash
-cd daemon
-cargo build --release
-```
-
-### Build the Electron App
-
-```bash
-cd electron
-npm install
-npm run build
-```
-
-### Install as System Service
-
-```bash
-sudo cp daemon/target/release/exit-gate-daemon /usr/local/bin/
-sudo cp systemd/exit-gate.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable exit-gate
-sudo systemctl start exit-gate
+sudo dpkg -i electron/dist/exit-gate_0.1.0_amd64.deb
 ```
 
 ## Usage
 
-### Start the GUI
-
+### Start the Daemon
 ```bash
-cd electron
-npm start
-```
+# Start the service
+sudo systemctl start exit-gate
 
-Or install the packaged application and run from your application menu.
-
-### Command Line
-
-```bash
-# Start the daemon manually
-sudo exit-gate-daemon
-
-# View logs
-sudo journalctl -u exit-gate -f
+# Enable auto-start on boot
+sudo systemctl enable exit-gate
 
 # Check status
 sudo systemctl status exit-gate
+
+# View logs
+sudo journalctl -u exit-gate -f
+```
+
+### Launch the GUI
+```bash
+# If using AppImage
+./electron/dist/Exit\ Gate-0.1.0.AppImage
+
+# If installed via .deb
+exit-gate
+```
+
+### Configuration
+
+Edit `/etc/exit-gate/config.toml`:
+```toml
+[daemon]
+socket_path = "/var/run/exit-gate/daemon.sock"
+log_level = "info"
+enable_ebpf = true
+
+[database]
+path = "/var/lib/exit-gate/exit-gate.db"
+
+[ui]
+prompt_timeout = 60
 ```
 
 ## Development
 
-### Build eBPF Programs
+### Run in Development Mode
+
+**Terminal 1: Daemon**
+```bash
+make dev-daemon
+# or
+cd daemon && sudo RUST_LOG=debug cargo run
+```
+
+**Terminal 2: Electron GUI**
+```bash
+make dev-electron
+# or
+cd electron && npm run dev
+```
+
+### Project Structure
+```
+exit-gate/
+├── ebpf/               # eBPF programs (C)
+│   ├── network_monitor.bpf.c
+│   └── Makefile
+├── daemon/             # Rust daemon
+│   ├── src/
+│   │   ├── main.rs
+│   │   ├── ebpf.rs
+│   │   ├── rule.rs
+│   │   ├── db.rs
+│   │   └── ipc.rs
+│   └── Cargo.toml
+├── electron/           # Electron GUI
+│   ├── src/
+│   │   ├── main.ts         # Electron main process
+│   │   ├── preload.ts      # Preload script
+│   │   ├── App.tsx         # React app
+│   │   └── components/     # UI components
+│   ├── package.json
+│   └── tsconfig.*.json
+├── config/             # Default configuration
+├── systemd/            # Systemd service files
+├── build.sh            # Build script
+├── package.sh          # Packaging script
+├── install.sh          # Installation script
+└── Makefile
+```
+
+## Troubleshooting
+
+### Permission Errors During Build
+**Error**: `stat /root/.cache/electron/...: permission denied`
+
+**Solution**: Don't build as root! Always build as regular user:
+```bash
+exit  # Exit from sudo -s
+make build
+make package
+```
+
+### eBPF Loading Fails
+**Error**: `Failed to load eBPF program`
+
+**Solution**: Ensure kernel supports eBPF (5.8+) and daemon runs as root:
+```bash
+uname -r  # Check kernel version
+sudo systemctl status exit-gate
+```
+
+### Daemon Won't Start
+**Error**: `Failed to bind to socket`
+
+**Solution**: Check if socket path is writable:
+```bash
+sudo mkdir -p /var/run/exit-gate
+sudo chown root:root /var/run/exit-gate
+sudo systemctl restart exit-gate
+```
+
+## Uninstallation
 
 ```bash
-cd ebpf
-make
+# Stop and disable service
+sudo systemctl stop exit-gate
+sudo systemctl disable exit-gate
+
+# Remove files
+sudo ./uninstall.sh
+
+# If using .deb package for GUI
+sudo dpkg -r exit-gate
 ```
-
-### Run Daemon in Debug Mode
-
-```bash
-cd daemon
-sudo RUST_LOG=debug cargo run
-```
-
-### Run Electron in Dev Mode
-
-```bash
-cd electron
-npm run dev
-```
-
-## Configuration
-
-Configuration file: `/etc/exit-gate/config.toml`
-
-```toml
-[daemon]
-socket_path = "/var/run/exit-gate/exit-gate.sock"
-db_path = "/var/lib/exit-gate/rules.db"
-log_level = "info"
-
-[notifications]
-timeout_seconds = 30
-default_action = "deny"  # deny or allow
-```
-
-## Rule Types
-
-1. **Process-based**: Allow/deny by executable path
-2. **Domain-based**: Allow/deny by destination domain
-3. **IP-based**: Allow/deny by destination IP/CIDR
-4. **Port-based**: Allow/deny by destination port
-5. **Combined**: Multiple criteria (process + domain + port)
-
-## Security Considerations
-
-- Daemon must run as root to load eBPF programs
-- Unix socket uses file permissions for access control
-- Rules are stored with secure file permissions
-- eBPF programs are verified by the kernel for safety
 
 ## License
 
-MIT
+MIT License - see LICENSE file
 
-## Credits
+## Contributing
 
-Inspired by OpenSnitch - Application Firewall for Linux
+Contributions welcome! Please read CONTRIBUTING.md for guidelines.
+
+## Acknowledgments
+
+Inspired by [OpenSnitch](https://github.com/evilsocket/opensnitch) by @evilsocket
