@@ -56,11 +56,14 @@ echo ""
 # Build Electron app
 echo "Building Electron application..."
 cd electron
-npm install
+if [ ! -d "node_modules" ]; then
+    echo "Installing npm dependencies..."
+    npm install
+fi
 npm run build
 npm run package:linux
 cd ..
-echo "✓ Electron app built"
+echo "✓ Electron app packaged"
 echo ""
 
 # Install files
@@ -125,7 +128,8 @@ echo ""
 echo "5. View logs:"
 echo "   sudo journalctl -u exit-gate -f"
 echo ""
-echo "6. Install the Electron app from:"
-echo "   electron/dist/Exit-Gate-*.AppImage"
+echo "6. Install the Electron GUI:"
+echo "   AppImage: electron/dist/Exit Gate-0.1.0.AppImage"
+echo "   Debian:   sudo dpkg -i electron/dist/exit-gate_0.1.0_amd64.deb"
 echo ""
 echo "==================================="

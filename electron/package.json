@@ -3,14 +3,18 @@
   "version": "0.1.0",
   "description": "Linux Application Firewall with eBPF",
   "main": "dist/main.js",
-  "author": "Exit Gate Contributors",
+  "homepage": "https://github.com/exitgate/exitgate",
+  "author": {
+    "name": "Exit Gate Contributors",
+    "email": "developers@exitgate.dev"
+  },
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
     "dev:react": "vite",
-    "dev:electron": "tsc && electron .",
-    "build": "tsc && vite build",
+    "dev:electron": "tsc -p tsconfig.electron.json && electron .",
+    "build": "tsc -p tsconfig.electron.json && vite build",
     "package": "electron-builder",
     "package:linux": "electron-builder --linux"
   },
@@ -41,7 +45,8 @@
     "productName": "Exit Gate",
     "linux": {
       "target": ["AppImage", "deb"],
-      "category": "Network"
+      "category": "Network",
+      "maintainer": "Exit Gate Contributors <developers@exitgate.dev>"
     },
     "files": [
       "dist/**/*",
