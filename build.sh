@@ -18,6 +18,10 @@ echo ""
 # Build Rust daemon
 echo "[2/3] Building daemon..."
 cd daemon
+# Clean any stale build artifacts
+if [ -f Cargo.lock ]; then
+    rm -f Cargo.lock
+fi
 cargo build --release
 cd ..
 echo "✓ Daemon built successfully"
