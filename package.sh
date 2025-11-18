@@ -51,9 +51,17 @@ echo ""
 
 # Package Electron app
 echo "Packaging Electron application..."
+
+# Check if Electron is already cached
+ELECTRON_CACHE="${ELECTRON_CACHE:-$HOME/.cache/electron}"
+if [ -f "$ELECTRON_CACHE/electron-v28.3.3-linux-x64.zip" ]; then
+    echo "✓ Found cached Electron binary at $ELECTRON_CACHE"
+fi
+
 cd electron
 npm run package:linux
 cd ..
+
 echo "✓ Electron app packaged successfully"
 echo ""
 
