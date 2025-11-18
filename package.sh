@@ -18,11 +18,36 @@ echo "==================================="
 echo ""
 
 # Check if build artifacts exist
-if [ ! -f "electron/dist/main.js" ]; then
-    echo "Error: Electron app not built yet!"
-    echo "Please run: ./build.sh"
+if [ ! -d "electron" ]; then
+    echo "Error: electron/ directory not found!"
+    echo "Are you running this from the project root?"
+    echo "Current directory: $(pwd)"
     exit 1
 fi
+
+if [ ! -d "electron/dist" ]; then
+    echo "Error: Electron dist directory not found!"
+    echo "Please run: ./build.sh first"
+    echo ""
+    echo "Debug info:"
+    echo "  Current dir: $(pwd)"
+    echo "  electron/ exists: yes"
+    echo "  electron/dist/ exists: no"
+    exit 1
+fi
+
+if [ ! -f "electron/dist/index.html" ] && [ ! -f "electron/dist/main.js" ]; then
+    echo "Error: Electron app not built yet!"
+    echo "The electron/dist directory exists but appears empty."
+    echo ""
+    echo "Debug info:"
+    echo "  Contents of electron/dist/:"
+    ls -la electron/dist/ 2>&1 | head -10
+    exit 1
+fi
+
+echo "✓ Build artifacts found"
+echo ""
 
 # Package Electron app
 echo "Packaging Electron application..."
