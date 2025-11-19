@@ -52,10 +52,17 @@ echo ""
 # Package Electron app
 echo "Packaging Electron application..."
 
-# Clean old packaging artifacts to prevent recursive packaging
+# Clean ALL packaging artifacts to prevent recursive packaging
 echo "Cleaning old packaging artifacts..."
-rm -f electron/dist/*.AppImage electron/dist/*.deb electron/dist/builder-*.yml
-rm -rf electron/dist/linux-unpacked electron/dist/win-unpacked electron/dist/mac
+rm -f electron/dist/*.AppImage electron/dist/*.deb electron/dist/*.yml 2>/dev/null || true
+rm -rf electron/dist/linux-unpacked electron/dist/win-unpacked electron/dist/mac electron/dist/*-unpacked 2>/dev/null || true
+
+# Verify clean
+if [ -d "electron/dist/linux-unpacked" ]; then
+    echo "⚠ Warning: Could not remove linux-unpacked directory"
+    echo "  This may cause packaging issues. Try removing manually:"
+    echo "  rm -rf electron/dist/linux-unpacked"
+fi
 
 # Check if Electron is already cached
 ELECTRON_CACHE="${ELECTRON_CACHE:-$HOME/.cache/electron}"
