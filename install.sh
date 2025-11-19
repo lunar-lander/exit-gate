@@ -39,6 +39,12 @@ mkdir -p /usr/local/lib/exit-gate/bpf
 mkdir -p /etc/exit-gate
 mkdir -p /var/lib/exit-gate
 mkdir -p /var/run/exit-gate
+mkdir -p /run/exit-gate
+
+# Create symlink if /var/run != /run
+if [ "$(readlink -f /var/run)" != "$(readlink -f /run)" ]; then
+    ln -sf /run/exit-gate /var/run/exit-gate 2>/dev/null || true
+fi
 
 # Install daemon
 cp daemon/target/release/exit-gate-daemon /usr/local/bin/

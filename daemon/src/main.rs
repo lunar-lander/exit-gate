@@ -37,9 +37,16 @@ struct Args {
     foreground: bool,
 }
 
+struct Stats {
+    total_connections: u64,
+    allowed: u64,
+    denied: u64,
+}
+
 struct DaemonState {
     rule_engine: RwLock<RuleEngine>,
     pending_prompts: RwLock<HashMap<String, ConnectionInfo>>,
+    stats: RwLock<Stats>,
     db: Database,
     config: Config,
 }
@@ -87,6 +94,11 @@ async fn main() -> Result<()> {
     let state = Arc::new(DaemonState {
         rule_engine: RwLock::new(rule_engine),
         pending_prompts: RwLock::new(HashMap::new()),
+        stats: RwLock::new(Stats {
+            total_connections: 0,
+            allowed: 0,
+            denied: 0,
+        }),
         db,
         config: config.clone(),
     });
@@ -116,17 +128,10 @@ async fn main() -> Result<()> {
 
     // TODO: Load and attach eBPF programs
     // This would use libbpf-rs to load the compiled eBPF object
-    // and attach to kprobes. For now we'll simulate events.
+    // and attach to kprobes. Once implemented, eBPF events will come
+    // from the ring buffer and be processed by the event handler.
 
     info!("Daemon initialized and ready");
-
-    // Simulate some connection events for demonstration
-    // In production, these would come from eBPF ring buffer
-    let state_clone = state.clone();
-    let ipc_tx_clone = ipc_tx.clone();
-    tokio::spawn(async move {
-        simulate_connection_events(state_clone, ipc_tx_clone).await;
-    });
 
     // Wait for tasks
     tokio::select! {
@@ -283,11 +288,11 @@ async fn handle_ipc_messages(
             }
 
             IpcMessage::GetStats => {
-                // TODO: Implement statistics gathering
+                let stats_lock = state.stats.read().await;
                 let stats = serde_json::json!({
-                    "total_connections": 0,
-                    "allowed": 0,
-                    "denied": 0,
+                    "total_connections": stats_lock.total_connections,
+                    "allowed": stats_lock.allowed,
+                    "denied": stats_lock.denied,
                     "active_rules": state.rule_engine.read().await.get_rules().len(),
                 });
 
@@ -305,6 +310,16 @@ async fn handle_ipc_messages(
                     } else {
                         Action::Deny
                     };
+
+                    // Update stats
+                    let mut stats = state.stats.write().await;
+                    stats.total_connections += 1;
+                    if matches!(action, Action::Allow) {
+                        stats.allowed += 1;
+                    } else {
+                        stats.denied += 1;
+                    }
+                    drop(stats);
 
                     // Save to history
                     let _ = state.db.save_connection_history(
@@ -357,6 +372,29 @@ async fn handle_ipc_messages(
                     }
 
                     info!("Prompt {} resolved: {:?}", prompt_id, action);
+
+                    // Send updated stats to all clients
+                    let stats_lock = state.stats.read().await;
+                    let stats_json = serde_json::json!({
+                        "total_connections": stats_lock.total_connections,
+                        "allowed": stats_lock.allowed,
+                        "denied": stats_lock.denied,
+                        "active_rules": state.rule_engine.read().await.get_rules().len(),
+                    });
+                    drop(stats_lock);
+
+                    let _ = resp_tx.send((
+                        "broadcast".to_string(),
+                        IpcMessage::StatsData { stats: stats_json },
+                    )).await;
+
+                    // Send updated history
+                    if let Ok(entries) = state.db.get_connection_history(100).await {
+                        let _ = resp_tx.send((
+                            "broadcast".to_string(),
+                            IpcMessage::HistoryData { entries },
+                        )).await;
+                    }
                 }
             }
 
@@ -367,30 +405,30 @@ async fn handle_ipc_messages(
     }
 }
 
-async fn simulate_connection_events(state: Arc<DaemonState>, ipc_tx: mpsc::Sender<IpcMessage>) {
-    // This is a placeholder for demonstration
-    // In production, this would read from eBPF ring buffer
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-    info!("Simulating connection event...");
-
-    let conn_info = ConnectionInfo {
-        pid: std::process::id(),
-        uid: unsafe { libc::getuid() },
-        gid: unsafe { libc::getgid() },
-        executable: "/usr/bin/curl".to_string(),
-        cmdline: "curl https://example.com".to_string(),
-        dest_ip: "93.184.216.34".parse::<IpAddr>().unwrap(),
-        dest_port: 443,
-        dest_host: Some("example.com".to_string()),
-        protocol: "TCP".to_string(),
-        process_start_time: 0,
-    };
-
+// TODO: Implement eBPF event handler
+// This function will be called when eBPF ring buffer receives connection events
+// For now, the daemon is ready but will only process manually triggered events
+#[allow(dead_code)]
+async fn handle_connection_event(
+    state: Arc<DaemonState>,
+    ipc_resp_tx: mpsc::Sender<(String, IpcMessage)>,
+    conn_info: ConnectionInfo,
+) {
     // Check rules
     let mut engine = state.rule_engine.write().await;
     if let Some(action) = engine.evaluate(&conn_info) {
+        drop(engine);
         info!("Connection matched rule: {:?}", action);
+
+        // Update stats
+        let mut stats = state.stats.write().await;
+        stats.total_connections += 1;
+        if matches!(action, Action::Allow) {
+            stats.allowed += 1;
+        } else {
+            stats.denied += 1;
+        }
+        drop(stats);
 
         // Log to database
         let _ = state.db.save_connection_history(
@@ -407,23 +445,55 @@ async fn simulate_connection_events(state: Arc<DaemonState>, ipc_tx: mpsc::Sende
             &action,
             None,
         ).await;
+
+        // Send connection event to GUI
+        let _ = ipc_resp_tx.send((
+            "broadcast".to_string(),
+            IpcMessage::ConnectionEvent {
+                timestamp: Utc::now().to_rfc3339(),
+                pid: conn_info.pid,
+                executable: conn_info.executable.clone(),
+                dest_ip: conn_info.dest_ip.to_string(),
+                dest_port: conn_info.dest_port,
+                dest_host: conn_info.dest_host.clone(),
+                protocol: conn_info.protocol.clone(),
+                action: format!("{:?}", action).to_lowercase(),
+            },
+        )).await;
+
+        // Send updated stats
+        let stats_lock = state.stats.read().await;
+        let stats_json = serde_json::json!({
+            "total_connections": stats_lock.total_connections,
+            "allowed": stats_lock.allowed,
+            "denied": stats_lock.denied,
+            "active_rules": state.rule_engine.read().await.get_rules().len(),
+        });
+
+        let _ = ipc_resp_tx.send((
+            "broadcast".to_string(),
+            IpcMessage::StatsData { stats: stats_json },
+        )).await;
     } else {
         // No rule matched, send prompt to GUI
         let prompt_id = uuid::Uuid::new_v4().to_string();
 
         state.pending_prompts.write().await.insert(prompt_id.clone(), conn_info.clone());
 
-        let _ = ipc_tx.send(IpcMessage::ConnectionPrompt {
-            prompt_id,
-            pid: conn_info.pid,
-            uid: conn_info.uid,
-            executable: conn_info.executable,
-            cmdline: conn_info.cmdline,
-            dest_ip: conn_info.dest_ip.to_string(),
-            dest_port: conn_info.dest_port,
-            dest_host: conn_info.dest_host,
-            protocol: conn_info.protocol,
-        }).await;
+        let _ = ipc_resp_tx.send((
+            "broadcast".to_string(),
+            IpcMessage::ConnectionPrompt {
+                prompt_id,
+                pid: conn_info.pid,
+                uid: conn_info.uid,
+                executable: conn_info.executable,
+                cmdline: conn_info.cmdline,
+                dest_ip: conn_info.dest_ip.to_string(),
+                dest_port: conn_info.dest_port,
+                dest_host: conn_info.dest_host,
+                protocol: conn_info.protocol,
+            },
+        )).await;
 
         info!("Connection prompt sent to GUI");
     }

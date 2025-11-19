@@ -15,12 +15,12 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=exit-gate
 
-# Security settings
+# Security settings - temporarily relaxed for testing
 NoNewPrivileges=false
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/exit-gate /var/run/exit-gate /run/exit-gate
+#PrivateTmp=true
+#ProtectSystem=strict
+#ProtectHome=true
+#ReadWritePaths=/var/lib/exit-gate /var/run/exit-gate /run/exit-gate
 
 # Capabilities needed for eBPF
 AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYS_ADMIN

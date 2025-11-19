@@ -1,9 +1,10 @@
 use tokio::net::{UnixListener, UnixStream};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
+use tokio::sync::{mpsc, RwLock};
 use serde::{Deserialize, Serialize};
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::Arc;
 use tracing::{info, warn, error};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,10 +89,12 @@ impl IpcServer {
         let tx = self.tx.clone();
         let _socket_path = self.socket_path.clone();
 
+        // Shared list of connected clients (writers)
+        let clients: Arc<RwLock<Vec<WriteHalf<UnixStream>>>> = Arc::new(RwLock::new(Vec::new()));
+        let clients_for_broadcast = clients.clone();
+
         // Spawn task to handle outgoing messages
         tokio::spawn(async move {
-            let mut clients: Vec<UnixStream> = Vec::new();
-
             while let Some((_client_id, msg)) = rx.recv().await {
                 // Broadcast to all connected clients
                 let json = match serde_json::to_string(&msg) {
@@ -103,13 +106,24 @@ impl IpcServer {
                 };
 
                 // Send to all clients
-                for client in &mut clients {
+                let mut clients_lock = clients_for_broadcast.write().await;
+                let mut to_remove = Vec::new();
+
+                for (idx, client) in clients_lock.iter_mut().enumerate() {
                     if let Err(e) = client.write_all(json.as_bytes()).await {
                         warn!("Failed to send message to client: {}", e);
+                        to_remove.push(idx);
+                        continue;
                     }
                     if let Err(e) = client.write_all(b"\n").await {
                         warn!("Failed to send newline to client: {}", e);
+                        to_remove.push(idx);
                     }
+                }
+
+                // Remove disconnected clients (in reverse order to preserve indices)
+                for idx in to_remove.iter().rev() {
+                    clients_lock.remove(*idx);
                 }
             }
         });
@@ -118,9 +132,17 @@ impl IpcServer {
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
+                    info!("New client connected");
                     let tx = tx.clone();
+                    let clients_clone = clients.clone();
+
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, tx).await {
+                        let (reader, writer) = tokio::io::split(stream);
+
+                        // Add writer to clients list
+                        clients_clone.write().await.push(writer);
+
+                        if let Err(e) = handle_client(reader, tx).await {
                             warn!("Client handler error: {}", e);
                         }
                     });
@@ -133,10 +155,7 @@ impl IpcServer {
     }
 }
 
-async fn handle_client(stream: UnixStream, tx: mpsc::Sender<IpcMessage>) -> Result<()> {
-    info!("New client connected");
-
-    let (reader, _writer) = stream.into_split();
+async fn handle_client(reader: tokio::io::ReadHalf<UnixStream>, tx: mpsc::Sender<IpcMessage>) -> Result<()> {
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
 

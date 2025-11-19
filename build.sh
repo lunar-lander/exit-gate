@@ -48,6 +48,15 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 npm run build
+
+# Verify TypeScript compilation succeeded
+if [ ! -f "dist/main.js" ] || [ ! -f "dist/preload.js" ]; then
+    echo "✗ Error: TypeScript compilation failed!"
+    echo "  Missing: dist/main.js or dist/preload.js"
+    echo "  The build script should have compiled these files."
+    exit 1
+fi
+
 cd ..
 echo "✓ Electron app built successfully"
 echo ""

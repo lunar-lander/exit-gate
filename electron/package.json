@@ -13,8 +13,8 @@
     "start": "electron .",
     "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
     "dev:react": "vite",
-    "dev:electron": "tsc -p tsconfig.electron.json && electron .",
-    "build": "tsc -p tsconfig.electron.json && vite build",
+    "dev:electron": "vite build && tsc -p tsconfig.electron.json && electron .",
+    "build": "vite build && tsc -p tsconfig.electron.json",
     "package": "electron-builder",
     "package:linux": "electron-builder --linux"
   },
@@ -49,7 +49,10 @@
       "maintainer": "Exit Gate Contributors <developers@exitgate.dev>"
     },
     "files": [
-      "dist/**/*",
+      "dist/main.js",
+      "dist/preload.js",
+      "dist/index.html",
+      "dist/assets/**/*",
       "package.json"
     ],
     "extraResources": [
