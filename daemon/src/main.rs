@@ -370,65 +370,100 @@ async fn handle_ipc_messages(
 async fn simulate_connection_events(state: Arc<DaemonState>, ipc_resp_tx: mpsc::Sender<(String, IpcMessage)>) {
     // This is a placeholder for demonstration
     // In production, this would read from eBPF ring buffer
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
-    info!("Simulating connection event...");
+    let test_connections = vec![
+        ("/usr/bin/curl", "curl https://example.com", "93.184.216.34", 443, Some("example.com"), "TCP"),
+        ("/usr/bin/firefox", "firefox", "1.1.1.1", 443, Some("cloudflare.com"), "TCP"),
+        ("/usr/bin/wget", "wget http://kernel.org", "139.178.84.217", 80, Some("kernel.org"), "TCP"),
+        ("/usr/bin/ssh", "ssh user@remote.host", "192.168.1.100", 22, Some("remote.host"), "TCP"),
+    ];
 
-    let conn_info = ConnectionInfo {
-        pid: std::process::id(),
-        uid: unsafe { libc::getuid() },
-        gid: unsafe { libc::getgid() },
-        executable: "/usr/bin/curl".to_string(),
-        cmdline: "curl https://example.com".to_string(),
-        dest_ip: "93.184.216.34".parse::<IpAddr>().unwrap(),
-        dest_port: 443,
-        dest_host: Some("example.com".to_string()),
-        protocol: "TCP".to_string(),
-        process_start_time: 0,
-    };
+    let mut idx = 0;
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
 
-    // Check rules
-    let mut engine = state.rule_engine.write().await;
-    if let Some(action) = engine.evaluate(&conn_info) {
-        info!("Connection matched rule: {:?}", action);
+        let (executable, cmdline, dest_ip, dest_port, dest_host, protocol) = test_connections[idx % test_connections.len()];
+        idx += 1;
 
-        // Log to database
-        let _ = state.db.save_connection_history(
-            Utc::now(),
-            conn_info.pid,
-            conn_info.uid,
-            conn_info.gid,
-            &conn_info.executable,
-            &conn_info.cmdline,
-            &conn_info.dest_ip.to_string(),
-            conn_info.dest_port,
-            conn_info.dest_host.as_deref(),
-            &conn_info.protocol,
-            &action,
-            None,
-        ).await;
-    } else {
-        // No rule matched, send prompt to GUI
-        let prompt_id = uuid::Uuid::new_v4().to_string();
+        info!("Simulating connection event: {} -> {}:{}", executable, dest_ip, dest_port);
 
-        state.pending_prompts.write().await.insert(prompt_id.clone(), conn_info.clone());
+        let conn_info = ConnectionInfo {
+            pid: std::process::id(),
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
+            executable: executable.to_string(),
+            cmdline: cmdline.to_string(),
+            dest_ip: dest_ip.parse::<IpAddr>().unwrap(),
+            dest_port,
+            dest_host: dest_host.map(|s| s.to_string()),
+            protocol: protocol.to_string(),
+            process_start_time: 0,
+        };
 
-        let _ = ipc_resp_tx.send((
-            "broadcast".to_string(),
-            IpcMessage::ConnectionPrompt {
-                prompt_id,
-                pid: conn_info.pid,
-                uid: conn_info.uid,
-                executable: conn_info.executable,
-                cmdline: conn_info.cmdline,
-                dest_ip: conn_info.dest_ip.to_string(),
-                dest_port: conn_info.dest_port,
-                dest_host: conn_info.dest_host,
-                protocol: conn_info.protocol,
-            },
-        )).await;
+        // Check rules
+        let mut engine = state.rule_engine.write().await;
+        if let Some(action) = engine.evaluate(&conn_info) {
+            info!("Connection matched rule: {:?}", action);
 
-        info!("Connection prompt sent to GUI");
+            // Log to database
+            let _ = state.db.save_connection_history(
+                Utc::now(),
+                conn_info.pid,
+                conn_info.uid,
+                conn_info.gid,
+                &conn_info.executable,
+                &conn_info.cmdline,
+                &conn_info.dest_ip.to_string(),
+                conn_info.dest_port,
+                conn_info.dest_host.as_deref(),
+                &conn_info.protocol,
+                &action,
+                None,
+            ).await;
+
+            // Send connection event to GUI
+            let _ = ipc_resp_tx.send((
+                "broadcast".to_string(),
+                IpcMessage::ConnectionEvent {
+                    timestamp: Utc::now().to_rfc3339(),
+                    pid: conn_info.pid,
+                    executable: conn_info.executable.clone(),
+                    dest_ip: conn_info.dest_ip.to_string(),
+                    dest_port: conn_info.dest_port,
+                    dest_host: conn_info.dest_host.clone(),
+                    protocol: conn_info.protocol.clone(),
+                    action: format!("{:?}", action).to_lowercase(),
+                },
+            )).await;
+
+            // Update stats
+            let _ = ipc_resp_tx.send((
+                "broadcast".to_string(),
+                IpcMessage::GetStats,
+            )).await;
+        } else {
+            // No rule matched, send prompt to GUI
+            let prompt_id = uuid::Uuid::new_v4().to_string();
+
+            state.pending_prompts.write().await.insert(prompt_id.clone(), conn_info.clone());
+
+            let _ = ipc_resp_tx.send((
+                "broadcast".to_string(),
+                IpcMessage::ConnectionPrompt {
+                    prompt_id,
+                    pid: conn_info.pid,
+                    uid: conn_info.uid,
+                    executable: conn_info.executable,
+                    cmdline: conn_info.cmdline,
+                    dest_ip: conn_info.dest_ip.to_string(),
+                    dest_port: conn_info.dest_port,
+                    dest_host: conn_info.dest_host,
+                    protocol: conn_info.protocol,
+                },
+            )).await;
+
+            info!("Connection prompt sent to GUI");
+        }
     }
 }
 
