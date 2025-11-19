@@ -24,14 +24,17 @@ cat > /etc/exit-gate/config.toml <<'EOF'
 [daemon]
 socket_path = "/var/run/exit-gate/exit-gate.sock"
 log_level = "info"
-enable_ebpf = false
+bpf_path = "/usr/local/lib/exit-gate/bpf"
+
+[notifications]
+timeout_seconds = 60
+default_action = "deny"
+monitor_outbound = true
+monitor_inbound = false
 
 [database]
-path = "/var/lib/exit-gate/exit-gate.db"
-
-[ui]
-prompt_timeout = 60
-default_action = "deny"
+db_path = "/var/lib/exit-gate/exit-gate.db"
+max_history_entries = 10000
 EOF
 
 chmod 644 /etc/exit-gate/config.toml
