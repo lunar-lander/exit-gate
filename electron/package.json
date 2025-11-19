@@ -49,11 +49,10 @@
       "maintainer": "Exit Gate Contributors <developers@exitgate.dev>"
     },
     "files": [
-      "dist/**/*",
-      "!dist/*.AppImage",
-      "!dist/*.deb",
-      "!dist/linux-unpacked",
-      "!dist/builder-*.yml",
+      "dist/main.js",
+      "dist/preload.js",
+      "dist/index.html",
+      "dist/assets/**/*",
       "package.json"
     ],
     "extraResources": [
