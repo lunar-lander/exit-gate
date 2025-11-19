@@ -37,9 +37,16 @@ struct Args {
     foreground: bool,
 }
 
+struct Stats {
+    total_connections: u64,
+    allowed: u64,
+    denied: u64,
+}
+
 struct DaemonState {
     rule_engine: RwLock<RuleEngine>,
     pending_prompts: RwLock<HashMap<String, ConnectionInfo>>,
+    stats: RwLock<Stats>,
     db: Database,
     config: Config,
 }
@@ -87,6 +94,11 @@ async fn main() -> Result<()> {
     let state = Arc::new(DaemonState {
         rule_engine: RwLock::new(rule_engine),
         pending_prompts: RwLock::new(HashMap::new()),
+        stats: RwLock::new(Stats {
+            total_connections: 0,
+            allowed: 0,
+            denied: 0,
+        }),
         db,
         config: config.clone(),
     });
@@ -283,11 +295,11 @@ async fn handle_ipc_messages(
             }
 
             IpcMessage::GetStats => {
-                // TODO: Implement statistics gathering
+                let stats_lock = state.stats.read().await;
                 let stats = serde_json::json!({
-                    "total_connections": 0,
-                    "allowed": 0,
-                    "denied": 0,
+                    "total_connections": stats_lock.total_connections,
+                    "allowed": stats_lock.allowed,
+                    "denied": stats_lock.denied,
                     "active_rules": state.rule_engine.read().await.get_rules().len(),
                 });
 
@@ -305,6 +317,16 @@ async fn handle_ipc_messages(
                     } else {
                         Action::Deny
                     };
+
+                    // Update stats
+                    let mut stats = state.stats.write().await;
+                    stats.total_connections += 1;
+                    if matches!(action, Action::Allow) {
+                        stats.allowed += 1;
+                    } else {
+                        stats.denied += 1;
+                    }
+                    drop(stats);
 
                     // Save to history
                     let _ = state.db.save_connection_history(
@@ -357,6 +379,29 @@ async fn handle_ipc_messages(
                     }
 
                     info!("Prompt {} resolved: {:?}", prompt_id, action);
+
+                    // Send updated stats to all clients
+                    let stats_lock = state.stats.read().await;
+                    let stats_json = serde_json::json!({
+                        "total_connections": stats_lock.total_connections,
+                        "allowed": stats_lock.allowed,
+                        "denied": stats_lock.denied,
+                        "active_rules": state.rule_engine.read().await.get_rules().len(),
+                    });
+                    drop(stats_lock);
+
+                    let _ = resp_tx.send((
+                        "broadcast".to_string(),
+                        IpcMessage::StatsData { stats: stats_json },
+                    )).await;
+
+                    // Send updated history
+                    if let Ok(entries) = state.db.get_connection_history(100).await {
+                        let _ = resp_tx.send((
+                            "broadcast".to_string(),
+                            IpcMessage::HistoryData { entries },
+                        )).await;
+                    }
                 }
             }
 
@@ -403,7 +448,18 @@ async fn simulate_connection_events(state: Arc<DaemonState>, ipc_resp_tx: mpsc::
         // Check rules
         let mut engine = state.rule_engine.write().await;
         if let Some(action) = engine.evaluate(&conn_info) {
+            drop(engine);
             info!("Connection matched rule: {:?}", action);
+
+            // Update stats
+            let mut stats = state.stats.write().await;
+            stats.total_connections += 1;
+            if matches!(action, Action::Allow) {
+                stats.allowed += 1;
+            } else {
+                stats.denied += 1;
+            }
+            drop(stats);
 
             // Log to database
             let _ = state.db.save_connection_history(
@@ -436,10 +492,18 @@ async fn simulate_connection_events(state: Arc<DaemonState>, ipc_resp_tx: mpsc::
                 },
             )).await;
 
-            // Update stats
+            // Send updated stats
+            let stats_lock = state.stats.read().await;
+            let stats_json = serde_json::json!({
+                "total_connections": stats_lock.total_connections,
+                "allowed": stats_lock.allowed,
+                "denied": stats_lock.denied,
+                "active_rules": state.rule_engine.read().await.get_rules().len(),
+            });
+
             let _ = ipc_resp_tx.send((
                 "broadcast".to_string(),
-                IpcMessage::GetStats,
+                IpcMessage::StatsData { stats: stats_json },
             )).await;
         } else {
             // No rule matched, send prompt to GUI
