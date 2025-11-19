@@ -123,9 +123,9 @@ async fn main() -> Result<()> {
     // Simulate some connection events for demonstration
     // In production, these would come from eBPF ring buffer
     let state_clone = state.clone();
-    let ipc_tx_clone = ipc_tx.clone();
+    let ipc_resp_tx_clone2 = ipc_resp_tx.clone();
     tokio::spawn(async move {
-        simulate_connection_events(state_clone, ipc_tx_clone).await;
+        simulate_connection_events(state_clone, ipc_resp_tx_clone2).await;
     });
 
     // Wait for tasks
@@ -367,7 +367,7 @@ async fn handle_ipc_messages(
     }
 }
 
-async fn simulate_connection_events(state: Arc<DaemonState>, ipc_tx: mpsc::Sender<IpcMessage>) {
+async fn simulate_connection_events(state: Arc<DaemonState>, ipc_resp_tx: mpsc::Sender<(String, IpcMessage)>) {
     // This is a placeholder for demonstration
     // In production, this would read from eBPF ring buffer
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -413,17 +413,20 @@ async fn simulate_connection_events(state: Arc<DaemonState>, ipc_tx: mpsc::Sende
 
         state.pending_prompts.write().await.insert(prompt_id.clone(), conn_info.clone());
 
-        let _ = ipc_tx.send(IpcMessage::ConnectionPrompt {
-            prompt_id,
-            pid: conn_info.pid,
-            uid: conn_info.uid,
-            executable: conn_info.executable,
-            cmdline: conn_info.cmdline,
-            dest_ip: conn_info.dest_ip.to_string(),
-            dest_port: conn_info.dest_port,
-            dest_host: conn_info.dest_host,
-            protocol: conn_info.protocol,
-        }).await;
+        let _ = ipc_resp_tx.send((
+            "broadcast".to_string(),
+            IpcMessage::ConnectionPrompt {
+                prompt_id,
+                pid: conn_info.pid,
+                uid: conn_info.uid,
+                executable: conn_info.executable,
+                cmdline: conn_info.cmdline,
+                dest_ip: conn_info.dest_ip.to_string(),
+                dest_port: conn_info.dest_port,
+                dest_host: conn_info.dest_host,
+                protocol: conn_info.protocol,
+            },
+        )).await;
 
         info!("Connection prompt sent to GUI");
     }
