@@ -52,6 +52,11 @@ echo ""
 # Package Electron app
 echo "Packaging Electron application..."
 
+# Clean old packaging artifacts to prevent recursive packaging
+echo "Cleaning old packaging artifacts..."
+rm -f electron/dist/*.AppImage electron/dist/*.deb electron/dist/builder-*.yml
+rm -rf electron/dist/linux-unpacked electron/dist/win-unpacked electron/dist/mac
+
 # Check if Electron is already cached
 ELECTRON_CACHE="${ELECTRON_CACHE:-$HOME/.cache/electron}"
 if [ -f "$ELECTRON_CACHE/electron-v28.3.3-linux-x64.zip" ]; then

@@ -50,6 +50,10 @@
     },
     "files": [
       "dist/**/*",
+      "!dist/*.AppImage",
+      "!dist/*.deb",
+      "!dist/linux-unpacked",
+      "!dist/builder-*.yml",
       "package.json"
     ],
     "extraResources": [
