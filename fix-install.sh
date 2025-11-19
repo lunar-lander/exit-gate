@@ -16,8 +16,14 @@ fi
 echo "Creating missing directories..."
 mkdir -p /var/lib/exit-gate
 mkdir -p /var/run/exit-gate
+mkdir -p /run/exit-gate
 mkdir -p /etc/exit-gate
-chmod 755 /var/lib/exit-gate /var/run/exit-gate /etc/exit-gate
+chmod 755 /var/lib/exit-gate /var/run/exit-gate /run/exit-gate /etc/exit-gate
+
+# Create symlink if /var/run != /run
+if [ "$(readlink -f /var/run)" != "$(readlink -f /run)" ]; then
+    ln -sf /run/exit-gate /var/run/exit-gate 2>/dev/null || true
+fi
 
 echo "Creating default configuration..."
 cat > /etc/exit-gate/config.toml <<'EOF'
