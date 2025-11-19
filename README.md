@@ -134,13 +134,18 @@ sudo journalctl -u exit-gate -f
 ```
 
 ### Launch the GUI
+
+**⚠️ IMPORTANT: Run as regular user, NOT with sudo!**
+
 ```bash
-# If using AppImage
+# If using AppImage (run as regular user)
 ./electron/dist/Exit\ Gate-0.1.0.AppImage
 
 # If installed via .deb
 exit-gate
 ```
+
+**Note**: If you get permission errors, DON'T use sudo. Electron apps should not run as root for security reasons.
 
 ### Configuration
 
