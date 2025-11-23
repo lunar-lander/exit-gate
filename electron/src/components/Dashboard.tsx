@@ -161,20 +161,33 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
           <Typography variant="h6" gutterBottom>
             Top Applications
           </Typography>
-          <ResponsiveContainer width="100%" height="90%">
-            <BarChart data={appChartData} layout="horizontal">
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" />
-              <YAxis 
-                type="category" 
-                dataKey="name" 
-                width={80}
-                tick={{ fontSize: 12 }}
-              />
-              <Tooltip />
-              <Bar dataKey="count" fill="#00e676" />
-            </BarChart>
-          </ResponsiveContainer>
+          {appChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height="90%">
+              <BarChart data={appChartData} layout="horizontal">
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis 
+                  type="number" 
+                  scale="log" 
+                  domain={['dataMin', 'dataMax']}
+                  allowDataOverflow
+                />
+                <YAxis 
+                  type="category" 
+                  dataKey="name" 
+                  width={80}
+                  tick={{ fontSize: 12 }}
+                />
+                <Tooltip formatter={(value) => [value, 'Requests']} />
+                <Bar dataKey="count" fill="#00e676" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <Box display="flex" alignItems="center" justifyContent="center" height="90%">
+              <Typography color="textSecondary">
+                No application data available
+              </Typography>
+            </Box>
+          )}
         </Paper>
       </Grid>
 
@@ -184,20 +197,33 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
           <Typography variant="h6" gutterBottom>
             Top Domains
           </Typography>
-          <ResponsiveContainer width="100%" height="90%">
-            <BarChart data={domainChartData} layout="horizontal">
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" />
-              <YAxis 
-                type="category" 
-                dataKey="name" 
-                width={120}
-                tick={{ fontSize: 10 }}
-              />
-              <Tooltip />
-              <Bar dataKey="count" fill="#ff9800" />
-            </BarChart>
-          </ResponsiveContainer>
+          {domainChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height="90%">
+              <BarChart data={domainChartData} layout="horizontal">
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis 
+                  type="number" 
+                  scale="log" 
+                  domain={['dataMin', 'dataMax']}
+                  allowDataOverflow
+                />
+                <YAxis 
+                  type="category" 
+                  dataKey="name" 
+                  width={120}
+                  tick={{ fontSize: 10 }}
+                />
+                <Tooltip formatter={(value) => [value, 'Connections']} />
+                <Bar dataKey="count" fill="#ff9800" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <Box display="flex" alignItems="center" justifyContent="center" height="90%">
+              <Typography color="textSecondary">
+                No domain data available
+              </Typography>
+            </Box>
+          )}
         </Paper>
       </Grid>
 
