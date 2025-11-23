@@ -54,7 +54,7 @@ const ConnectionHistory: React.FC<ConnectionHistoryProps> = ({ history }) => {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box display="flex" flexDirection={{ xs: 'column', sm: 'row' }} gap={2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} mb={3}>
         <Typography variant="h5">Connection History</Typography>
         <TextField
           size="small"
@@ -73,7 +73,7 @@ const ConnectionHistory: React.FC<ConnectionHistoryProps> = ({ history }) => {
       </Box>
 
       <TableContainer component={Paper}>
-        <Table>
+        <Table size="small">
           <TableHead>
             <TableRow>
               <TableCell>Timestamp</TableCell>
@@ -86,59 +86,40 @@ const ConnectionHistory: React.FC<ConnectionHistoryProps> = ({ history }) => {
           </TableHead>
           <TableBody>
             {paginatedHistory.map((entry) => (
-              <TableRow key={entry.id} hover>
-                <TableCell>
-                  {format(new Date(entry.timestamp), 'yyyy-MM-dd HH:mm:ss')}
+              <TableRow key={entry.id} hover sx={{ '& > *': { borderBottom: 'unset' } }}>
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="body2">
+                    {format(new Date(entry.timestamp), 'HH:mm:ss')}
+                  </Typography>
+                  <Typography variant="caption" color="textSecondary">
+                    {format(new Date(entry.timestamp), 'MM/dd')}
+                  </Typography>
                 </TableCell>
-                <TableCell>
-                  <Box>
-                    <Typography variant="body2" fontWeight="medium">
-                      {entry.executable.split('/').pop()}
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      color="textSecondary"
-                      sx={{
-                        display: 'block',
-                        maxWidth: 300,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {entry.cmdline}
-                    </Typography>
-                  </Box>
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="body2" fontWeight="medium">
+                    {entry.executable.split('/').pop()}
+                  </Typography>
                 </TableCell>
-                <TableCell>
-                  <Box>
-                    <Typography variant="body2">
-                      {entry.dest_host || entry.dest_ip}:{entry.dest_port}
-                    </Typography>
-                    {entry.dest_host && (
-                      <Typography variant="caption" color="textSecondary">
-                        {entry.dest_ip}
-                      </Typography>
-                    )}
-                  </Box>
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="body2">
+                    {entry.dest_host || entry.dest_ip}:{entry.dest_port}
+                  </Typography>
                 </TableCell>
-                <TableCell>
-                  <Chip label={entry.protocol} size="small" variant="outlined" />
+                <TableCell sx={{ py: 1 }}>
+                  <Chip label={entry.protocol} size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }} />
                 </TableCell>
-                <TableCell>
+                <TableCell sx={{ py: 1 }}>
                   <Chip
-                    icon={entry.action === 'allow' ? <CheckCircle /> : <Block />}
+                    icon={entry.action === 'allow' ? <CheckCircle sx={{ fontSize: 14 }} /> : <Block sx={{ fontSize: 14 }} />}
                     label={entry.action.toUpperCase()}
                     color={entry.action === 'allow' ? 'success' : 'error'}
                     size="small"
+                    sx={{ height: 20, fontSize: 10 }}
                   />
                 </TableCell>
-                <TableCell>
-                  <Typography variant="body2" fontFamily="monospace">
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="caption" fontFamily="monospace">
                     {entry.pid}
-                  </Typography>
-                  <Typography variant="caption" color="textSecondary">
-                    UID: {entry.uid}
                   </Typography>
                 </TableCell>
               </TableRow>

@@ -132,7 +132,7 @@ function App() {
           </Tabs>
         </AppBar>
 
-        <Container maxWidth={false} sx={{ mt: 3, mb: 3, flexGrow: 1, overflow: 'auto' }}>
+        <Container maxWidth="xl" sx={{ mt: { xs: 1, md: 3 }, mb: 3, flexGrow: 1, overflow: 'auto', px: { xs: 2, md: 3 } }}>
           {currentTab === 0 && <Dashboard stats={stats} recentConnections={history.slice(0, 10)} />}
           {currentTab === 1 && (
             <RulesManager

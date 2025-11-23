@@ -16,7 +16,7 @@ import {
   Security,
   NetworkCheck,
 } from '@mui/icons-material';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { Stats, HistoryEntry } from '../types';
 import { format } from 'date-fns';
 
@@ -30,6 +30,30 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
     { name: 'Allowed', value: stats.allowed, color: '#00e676' },
     { name: 'Denied', value: stats.denied, color: '#ff1744' },
   ];
+
+  // Aggregate data by application
+  const appData = recentConnections.reduce((acc, conn) => {
+    const app = conn.executable.split('/').pop() || conn.executable;
+    acc[app] = (acc[app] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const appChartData = Object.entries(appData)
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 10)
+    .map(([name, count]) => ({ name, count }));
+
+  // Aggregate data by domain
+  const domainData = recentConnections.reduce((acc, conn) => {
+    const domain = conn.dest_host || conn.dest_ip;
+    acc[domain] = (acc[domain] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const domainChartData = Object.entries(domainData)
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 10)
+    .map(([name, count]) => ({ name, count }));
 
   return (
     <Grid container spacing={3}>
@@ -103,8 +127,8 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
       </Grid>
 
       {/* Pie Chart */}
-      <Grid item xs={12} md={6}>
-        <Paper sx={{ p: 3, height: 400 }}>
+      <Grid item xs={12} md={6} lg={4}>
+        <Paper sx={{ p: 3, height: 350 }}>
           <Typography variant="h6" gutterBottom>
             Connection Statistics
           </Typography>
@@ -116,7 +140,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
                 cy="50%"
                 labelLine={false}
                 label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                outerRadius={100}
+                outerRadius={80}
                 fill="#8884d8"
                 dataKey="value"
               >
@@ -131,49 +155,101 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
         </Paper>
       </Grid>
 
+      {/* Applications Bar Chart */}
+      <Grid item xs={12} md={6} lg={4}>
+        <Paper sx={{ p: 3, height: 350 }}>
+          <Typography variant="h6" gutterBottom>
+            Top Applications
+          </Typography>
+          <ResponsiveContainer width="100%" height="90%">
+            <BarChart data={appChartData} layout="horizontal">
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis type="number" />
+              <YAxis 
+                type="category" 
+                dataKey="name" 
+                width={80}
+                tick={{ fontSize: 12 }}
+              />
+              <Tooltip />
+              <Bar dataKey="count" fill="#00e676" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Paper>
+      </Grid>
+
+      {/* Domains Bar Chart */}
+      <Grid item xs={12} md={6} lg={4}>
+        <Paper sx={{ p: 3, height: 350 }}>
+          <Typography variant="h6" gutterBottom>
+            Top Domains
+          </Typography>
+          <ResponsiveContainer width="100%" height="90%">
+            <BarChart data={domainChartData} layout="horizontal">
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis type="number" />
+              <YAxis 
+                type="category" 
+                dataKey="name" 
+                width={120}
+                tick={{ fontSize: 10 }}
+              />
+              <Tooltip />
+              <Bar dataKey="count" fill="#ff9800" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Paper>
+      </Grid>
+
       {/* Recent Connections */}
-      <Grid item xs={12} md={6}>
-        <Paper sx={{ p: 3, height: 400, overflow: 'auto' }}>
+      <Grid item xs={12}>
+        <Paper sx={{ p: 3, maxHeight: 300, overflow: 'auto' }}>
           <Typography variant="h6" gutterBottom>
             Recent Connections
           </Typography>
-          <List>
+          <List sx={{ py: 0 }}>
             {recentConnections.map((conn, index) => (
               <ListItem
                 key={index}
                 sx={{
-                  borderLeft: 4,
+                  borderLeft: 3,
                   borderColor: conn.action === 'allow' ? 'success.main' : 'error.main',
-                  mb: 1,
+                  mb: 0.5,
                   bgcolor: 'background.default',
+                  minHeight: 48,
+                  py: 0.5,
                 }}
               >
                 <ListItemText
-                  primary={`${conn.executable} → ${conn.dest_host || conn.dest_ip}:${conn.dest_port}`}
+                  primary={
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {`${conn.executable.split('/').pop()} → ${conn.dest_host || conn.dest_ip}:${conn.dest_port}`}
+                    </Typography>
+                  }
                   secondary={
-                    <>
-                      <Typography component="span" variant="body2" color="textSecondary">
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.25 }}>
+                      <Typography variant="caption" color="textSecondary">
                         {format(new Date(conn.timestamp), 'HH:mm:ss')}
                       </Typography>
-                      {' • '}
                       <Typography
-                        component="span"
-                        variant="body2"
-                        color={conn.action === 'allow' ? 'success.main' : 'error.main'}
+                        variant="caption"
+                        sx={{
+                          color: conn.action === 'allow' ? 'success.main' : 'error.main',
+                          fontWeight: 600,
+                        }}
                       >
                         {conn.action.toUpperCase()}
                       </Typography>
-                      {' • '}
-                      <Typography component="span" variant="body2" color="textSecondary">
+                      <Typography variant="caption" color="textSecondary">
                         {conn.protocol}
                       </Typography>
-                    </>
+                    </Box>
                   }
                 />
               </ListItem>
             ))}
             {recentConnections.length === 0 && (
-              <ListItem>
+              <ListItem sx={{ minHeight: 48 }}>
                 <ListItemText
                   primary="No recent connections"
                   secondary="Connection events will appear here"
