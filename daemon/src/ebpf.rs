@@ -357,11 +357,10 @@ pub async fn start_ebpf_monitor(
                 event.protocol_string()
             );
 
-            // Send to channel (blocking in sync context)
+            // Use try_send to avoid blocking (non-blocking send)
             let tx_clone = tx.clone();
-            if let Err(e) = tx_clone.blocking_send(event) {
-                error!("Failed to send event: {}", e);
-                return -1;
+            if let Err(e) = tx_clone.try_send(event) {
+                warn!("Failed to send event (channel full or closed): {}", e);
             }
         }
         0
