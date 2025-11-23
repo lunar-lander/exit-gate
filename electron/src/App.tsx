@@ -188,7 +188,7 @@ function App() {
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: 'background.default' }}>
         <AppBar position="static" elevation={0}>
           <Toolbar>
-            <Shield sx={{ mr: 2, color: 'primary.main' }} />
+            <Box component="img" src="logo.png" sx={{ width: 40, height: 40, mr: 2 }} />
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
               Exit Gate
             </Typography>
