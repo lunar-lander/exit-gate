@@ -3,7 +3,7 @@ use libbpf_rs::{ObjectBuilder, Object, RingBufferBuilder, Link};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error, debug, trace};
 
 // Event types from eBPF program
 const EVENT_TCP_CONNECT: u8 = 1;
@@ -347,7 +347,7 @@ pub async fn start_ebpf_monitor(
 
     rb_builder.add(&map, move |data: &[u8]| {
         if let Some(event) = parse_event(data) {
-            debug!(
+            trace!(
                 "eBPF event: {} {} -> {}:{} (PID: {}, {})",
                 event.comm_string(),
                 event.event_type_string(),

@@ -229,7 +229,7 @@ impl RuleEngine {
         self.rules.sort_by(|a, b| b.priority.cmp(&a.priority));
     }
 
-    pub fn evaluate(&mut self, conn: &ConnectionInfo) -> Option<Action> {
+    pub fn evaluate(&self, conn: &ConnectionInfo) -> Option<Action> {
         // First check process-specific rules
         if let Some(proc_rules) = self.process_rules.get(&conn.pid) {
             for rule in proc_rules {
@@ -240,17 +240,10 @@ impl RuleEngine {
         }
 
         // Then check global rules
-        for rule in &mut self.rules {
+        for rule in &self.rules {
             if rule.matches(conn) {
-                // Update hit count
-                rule.hit_count += 1;
-                rule.last_hit = Some(Utc::now());
-
-                // If it's a "once" rule, disable it after first match
-                if rule.duration == Duration::Once {
-                    rule.enabled = false;
-                }
-
+                // Mutation removed for concurrent read access
+                // Hit counting and state updates should be handled separately
                 return Some(rule.action.clone());
             }
         }

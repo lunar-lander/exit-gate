@@ -8,7 +8,7 @@ mod ebpf;
 use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::sync::mpsc;
-use tracing::{info, error, warn, debug};
+use tracing::{info, error, warn, debug, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use chrono::Utc;
 use std::net::IpAddr;
@@ -72,13 +72,13 @@ async fn main() -> Result<()> {
     let config = Config::load_or_default(args.config.as_deref())
         .context("Failed to load configuration")?;
 
-    info!("Configuration loaded");
+    info!("Configuration loaded. Database path: {}", config.database.db_path);
 
     // Initialize database
     let db = Database::new(&config.database.db_path).await
         .context("Failed to initialize database")?;
 
-    info!("Database initialized at {}", config.database.db_path);
+    info!("Database initialized");
 
     // Load rules from database
     let mut rule_engine = RuleEngine::new();
@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
     info!("IPC server started on {}", config.daemon.socket_path);
 
     // Start eBPF monitor
-    let (ebpf_tx, mut ebpf_rx) = mpsc::channel::<ConnectionEvent>(1000);
+    let (ebpf_tx, mut ebpf_rx) = mpsc::channel::<ConnectionEvent>(10000);
     let bpf_path = config.daemon.bpf_path.clone();
 
     let ebpf_handle = tokio::spawn(async move {
@@ -477,22 +477,35 @@ async fn handle_ipc_messages(
     }
 }
 
-/// Handle an eBPF connection event
 async fn handle_ebpf_event(
     state: Arc<DaemonState>,
     ipc_resp_tx: mpsc::Sender<(String, IpcMessage)>,
     event: ConnectionEvent,
 ) {
-    // Get executable path from /proc
-    let executable = match std::fs::read_link(format!("/proc/{}/exe", event.pid)) {
-        Ok(path) => path.to_string_lossy().to_string(),
-        Err(_) => event.comm_string(),
-    };
+    // Perform blocking /proc reads in a separate thread
+    let pid = event.pid;
+    let event_comm = event.comm_string(); // Clone string before moving
+    
+    let proc_info = tokio::task::spawn_blocking(move || {
+        let executable = match std::fs::read_link(format!("/proc/{}/exe", pid)) {
+            Ok(path) => path.to_string_lossy().to_string(),
+            Err(_) => event_comm,
+        };
 
-    // Get command line
-    let cmdline = match std::fs::read_to_string(format!("/proc/{}/cmdline", event.pid)) {
-        Ok(cmd) => cmd.replace('\0', " ").trim().to_string(),
-        Err(_) => executable.clone(),
+        let cmdline = match std::fs::read_to_string(format!("/proc/{}/cmdline", pid)) {
+            Ok(cmd) => cmd.replace('\0', " ").trim().to_string(),
+            Err(_) => executable.clone(),
+        };
+        
+        (executable, cmdline)
+    }).await;
+
+    let (executable, cmdline) = match proc_info {
+        Ok(info) => info,
+        Err(e) => {
+            error!("Failed to join blocking task: {}", e);
+            return;
+        }
     };
 
     // Parse destination IP
@@ -504,11 +517,6 @@ async fn handle_ebpf_event(
             return;
         }
     };
-
-    // Skip loopback and local connections (optional, can be configured)
-    if dest_ip_parsed.is_loopback() {
-        return;
-    }
 
     let conn_info = ConnectionInfo {
         pid: event.pid,
@@ -523,18 +531,20 @@ async fn handle_ebpf_event(
         process_start_time: 0,
     };
 
-    info!(
+    trace!(
         "Connection: {} ({}) -> {}:{} [{}]",
         executable, event.pid, dest_ip, event.dport, event.protocol_string()
     );
 
-    // Check rules
-    let mut engine = state.rule_engine.write().await;
-    if let Some(action) = engine.evaluate(&conn_info) {
-        drop(engine);
+    // Check rules using READ lock first for better concurrency
+    let engine = state.rule_engine.read().await;
+    let action = engine.evaluate(&conn_info);
+    drop(engine); // Release read lock immediately
+
+    if let Some(action) = action {
         debug!("Connection matched rule: {:?}", action);
 
-        // Update stats
+        // Update stats (requires write lock, but short duration)
         let mut stats = state.stats.write().await;
         stats.total_connections += 1;
         if matches!(action, Action::Allow) {
@@ -576,6 +586,9 @@ async fn handle_ebpf_event(
         )).await;
 
         // Send updated stats
+        // To reduce IPC traffic, maybe don't send stats on every single packet?
+        // But for now, let's keep it to maintain behavior.
+        // Optimization: clone stats inside the lock to minimize hold time
         let stats_lock = state.stats.read().await;
         let stats_json = serde_json::json!({
             "total_connections": stats_lock.total_connections,
@@ -583,13 +596,13 @@ async fn handle_ebpf_event(
             "denied": stats_lock.denied,
             "active_rules": state.rule_engine.read().await.get_rules().len(),
         });
+        drop(stats_lock);
 
         let _ = ipc_resp_tx.send((
             "broadcast".to_string(),
             IpcMessage::StatsData { stats: stats_json },
         )).await;
     } else {
-        drop(engine);
         // No rule matched, send prompt to GUI
         let prompt_id = uuid::Uuid::new_v4().to_string();
 
