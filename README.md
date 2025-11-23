@@ -2,6 +2,8 @@
 
 **Linux Application Firewall with eBPF**
 
+![exit-gate](./exit-gate.gif)
+
 Exit Gate is an elaborate OpenSnitch-like application firewall for Linux that uses eBPF for kernel-level network monitoring, Rust for the daemon backend, and Electron for the desktop GUI.
 
 ## Features
