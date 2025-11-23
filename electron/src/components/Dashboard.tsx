@@ -12,6 +12,10 @@ import {
   useTheme,
   Chip,
   Avatar,
+  FormControl,
+  Select,
+  MenuItem,
+  InputLabel,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -47,6 +51,25 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
   const theme = useTheme();
+  const [timeRange, setTimeRange] = React.useState('1h');
+
+  React.useEffect(() => {
+    const now = new Date();
+    const since = new Date(now);
+
+    switch (timeRange) {
+      case '30m': since.setMinutes(now.getMinutes() - 30); break;
+      case '1h': since.setHours(now.getHours() - 1); break;
+      case '6h': since.setHours(now.getHours() - 6); break;
+      case '12h': since.setHours(now.getHours() - 12); break;
+      case '24h': since.setHours(now.getHours() - 24); break;
+      case '7d': since.setDate(now.getDate() - 7); break;
+      case '30d': since.setDate(now.getDate() - 30); break;
+      default: since.setHours(now.getHours() - 1);
+    }
+
+    window.electron.getHistorySince(since.toISOString());
+  }, [timeRange]);
 
   // Pastel colors derived from theme or custom
   const COLORS = {
@@ -143,6 +166,32 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
 
   return (
     <Grid container spacing={3}>
+      {/* Header with Time Selector */}
+      <Grid item xs={12} display="flex" justifyContent="flex-end" alignItems="center">
+        <FormControl size="small" sx={{ minWidth: 150 }}>
+          <Select
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value)}
+            displayEmpty
+            inputProps={{ 'aria-label': 'Time Range' }}
+            sx={{
+              bgcolor: 'background.paper',
+              '& .MuiOutlinedInput-notchedOutline': {
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+              },
+            }}
+          >
+            <MenuItem value="30m">Last 30 Minutes</MenuItem>
+            <MenuItem value="1h">Last Hour</MenuItem>
+            <MenuItem value="6h">Last 6 Hours</MenuItem>
+            <MenuItem value="12h">Last 12 Hours</MenuItem>
+            <MenuItem value="24h">Last 24 Hours</MenuItem>
+            <MenuItem value="7d">Last 7 Days</MenuItem>
+            <MenuItem value="30d">Last 30 Days</MenuItem>
+          </Select>
+        </FormControl>
+      </Grid>
+
       {/* Top Stats Row */}
       <Grid item xs={12} sm={6} md={3}>
         <StatCard
@@ -190,7 +239,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
                 <BarChart data={appChartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
                   <XAxis dataKey="name" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} />
-                  <YAxis stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} />
+                  <YAxis stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} scale="log" domain={[1, 'auto']} />
                   <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
                   <Bar dataKey="count" fill={COLORS.apps} radius={[4, 4, 0, 0]} barSize={40} />
                 </BarChart>
@@ -265,7 +314,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={domainChartData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
-                  <XAxis type="number" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} />
+                  <XAxis type="number" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} scale="log" domain={[1, 'auto']} />
                   <YAxis
                     dataKey="name"
                     type="category"
@@ -295,7 +344,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
              <Typography variant="h6">Recent Activity</Typography>
           </Box>
           <List sx={{ p: 0, maxHeight: 400, overflow: 'auto' }}>
-            {recentConnections.map((conn, index) => (
+            {recentConnections.slice(0, 50).map((conn, index) => (
               <ListItem
                 key={index}
                 sx={{

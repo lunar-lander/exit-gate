@@ -135,6 +135,10 @@ ipcMain.handle('get-history', async (_event, limit) => {
   sendToDaemon({ type: 'GetHistory', limit: limit || 100 });
 });
 
+ipcMain.handle('get-history-since', async (_event, timestamp) => {
+  sendToDaemon({ type: 'GetHistorySince', timestamp });
+});
+
 ipcMain.handle('get-stats', async () => {
   sendToDaemon({ type: 'GetStats' });
 });

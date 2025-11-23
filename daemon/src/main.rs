@@ -326,6 +326,39 @@ async fn handle_ipc_messages(
                 }
             }
 
+            IpcMessage::GetHistorySince { timestamp } => {
+                match timestamp.parse::<chrono::DateTime<Utc>>() {
+                    Ok(since) => {
+                        match state.db.get_connection_history_since(since).await {
+                            Ok(entries) => {
+                                let _ = resp_tx.send((
+                                    "broadcast".to_string(),
+                                    IpcMessage::HistoryData { entries },
+                                )).await;
+                            }
+                            Err(e) => {
+                                error!("Failed to get history since {}: {}", timestamp, e);
+                                let _ = resp_tx.send((
+                                    "broadcast".to_string(),
+                                    IpcMessage::Error {
+                                        message: format!("Failed to get history: {}", e),
+                                    },
+                                )).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                         error!("Invalid timestamp format: {}", e);
+                         let _ = resp_tx.send((
+                            "broadcast".to_string(),
+                            IpcMessage::Error {
+                                message: format!("Invalid timestamp: {}", e),
+                            },
+                        )).await;
+                    }
+                }
+            }
+
             IpcMessage::GetStats => {
                 let stats_lock = state.stats.read().await;
                 let stats = serde_json::json!({

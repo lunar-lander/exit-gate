@@ -119,7 +119,6 @@ function App() {
   useEffect(() => {
     // Request initial data
     window.electron.getRules();
-    window.electron.getHistory(100);
     window.electron.getStats();
 
     // Listen for daemon messages
@@ -145,7 +144,7 @@ function App() {
 
         case 'ConnectionEvent':
           // Add to history
-          setHistory((prev) => [message as unknown as HistoryEntry, ...prev].slice(0, 100));
+          setHistory((prev) => [message as unknown as HistoryEntry, ...prev].slice(0, 50000));
           break;
 
         case 'Success':
@@ -207,7 +206,7 @@ function App() {
         </AppBar>
 
         <Container maxWidth="xl" sx={{ mt: { xs: 2, md: 4 }, mb: 4, flexGrow: 1, overflow: 'auto', px: { xs: 2, md: 4 } }}>
-          {currentTab === 0 && <Dashboard stats={stats} recentConnections={history.slice(0, 10)} />}
+          {currentTab === 0 && <Dashboard stats={stats} recentConnections={history} />}
           {currentTab === 1 && (
             <RulesManager
               rules={rules}

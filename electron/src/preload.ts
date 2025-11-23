@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electron', {
 
   // History and stats
   getHistory: (limit: number) => ipcRenderer.invoke('get-history', limit),
+  getHistorySince: (timestamp: string) => ipcRenderer.invoke('get-history-since', timestamp),
   getStats: () => ipcRenderer.invoke('get-stats'),
 
   // Prompt responses

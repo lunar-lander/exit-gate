@@ -328,6 +328,26 @@ impl Database {
         .await
         .context("Failed to fetch connection history")?;
 
+        self.map_history_rows(rows)
+    }
+
+    pub async fn get_connection_history_since(&self, since: DateTime<Utc>) -> Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM connection_history
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC
+            "#
+        )
+        .bind(since.to_rfc3339())
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch connection history since timestamp")?;
+
+        self.map_history_rows(rows)
+    }
+
+    fn map_history_rows(&self, rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<serde_json::Value>> {
         let mut history = Vec::new();
         for row in rows {
             let mut entry = serde_json::Map::new();
@@ -347,7 +367,6 @@ impl Database {
 
             history.push(serde_json::Value::Object(entry));
         }
-
         Ok(history)
     }
 
