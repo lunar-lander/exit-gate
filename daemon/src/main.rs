@@ -419,13 +419,11 @@ async fn handle_ipc_messages(
                         };
 
                         let rule = Rule::new(
-                            format!("Auto: {} to {}:{}", conn_info.executable, conn_info.dest_ip, conn_info.dest_port),
+                            format!("Auto: {}", conn_info.executable),
                             action.clone(),
                             duration.clone(),
                             RuleCriteria {
                                 executable: Some(conn_info.executable.clone()),
-                                dest_ip: Some(conn_info.dest_ip.to_string()),
-                                dest_port: Some(conn_info.dest_port),
                                 ..Default::default()
                             },
                         );
