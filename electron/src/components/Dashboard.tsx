@@ -9,14 +9,34 @@ import {
   List,
   ListItem,
   ListItemText,
+  useTheme,
+  Chip,
+  Avatar,
 } from '@mui/material';
 import {
   CheckCircle,
   Cancel,
   Security,
   NetworkCheck,
+  TrendingUp,
+  Dns,
+  Apps,
 } from '@mui/icons-material';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import {
+  PieChart,
+  Pie,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  Legend,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  AreaChart,
+  Area,
+} from 'recharts';
 import { Stats, HistoryEntry } from '../types';
 import { format } from 'date-fns';
 
@@ -26,9 +46,21 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
+  const theme = useTheme();
+
+  // Pastel colors derived from theme or custom
+  const COLORS = {
+    allowed: theme.palette.success.main, // #34d399
+    denied: theme.palette.error.main,   // #f87171
+    apps: theme.palette.primary.main,   // #818cf8
+    domains: theme.palette.secondary.main, // #c084fc
+    grid: 'rgba(255, 255, 255, 0.05)',
+    text: theme.palette.text.secondary,
+  };
+
   const pieData = [
-    { name: 'Allowed', value: stats.allowed, color: '#00e676' },
-    { name: 'Denied', value: stats.denied, color: '#ff1744' },
+    { name: 'Allowed', value: stats.allowed, color: COLORS.allowed },
+    { name: 'Denied', value: stats.denied, color: COLORS.denied },
   ];
 
   // Aggregate data by application
@@ -39,7 +71,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
   }, {} as Record<string, number>);
 
   const appChartData = Object.entries(appData)
-    .sort(([,a], [,b]) => b - a)
+    .sort(([, a], [, b]) => b - a)
     .slice(0, 10)
     .map(([name, count]) => ({ name, count }));
 
@@ -51,235 +83,257 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
   }, {} as Record<string, number>);
 
   const domainChartData = Object.entries(domainData)
-    .sort(([,a], [,b]) => b - a)
+    .sort(([, a], [, b]) => b - a)
     .slice(0, 10)
     .map(([name, count]) => ({ name, count }));
 
+  // Custom Tooltip for Charts
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <Box
+          sx={{
+            bgcolor: 'background.paper',
+            p: 1.5,
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 2,
+            boxShadow: theme.shadows[4],
+          }}
+        >
+          <Typography variant="body2" color="text.primary" fontWeight="bold">
+            {label}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {`${payload[0].value} connections`}
+          </Typography>
+        </Box>
+      );
+    }
+    return null;
+  };
+
+  const StatCard = ({ title, value, icon, color }: any) => (
+    <Card sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <Typography variant="body2" color="textSecondary" gutterBottom fontWeight="medium">
+              {title}
+            </Typography>
+            <Typography variant="h3" fontWeight="bold" sx={{ color: color }}>
+              {value}
+            </Typography>
+          </Box>
+          <Box
+            sx={{
+              p: 1,
+              borderRadius: 2,
+              bgcolor: `${color}15`, // 15% opacity
+              color: color,
+              display: 'flex',
+            }}
+          >
+            {icon}
+          </Box>
+        </Box>
+      </CardContent>
+    </Card>
+  );
+
   return (
     <Grid container spacing={3}>
-      {/* Stats Cards */}
+      {/* Top Stats Row */}
       <Grid item xs={12} sm={6} md={3}>
-        <Card>
-          <CardContent>
-            <Box display="flex" alignItems="center" justifyContent="space-between">
-              <Box>
-                <Typography color="textSecondary" gutterBottom>
-                  Total Connections
-                </Typography>
-                <Typography variant="h4">{stats.total_connections}</Typography>
-              </Box>
-              <NetworkCheck sx={{ fontSize: 48, color: 'primary.main' }} />
-            </Box>
-          </CardContent>
-        </Card>
+        <StatCard
+          title="Total Connections"
+          value={stats.total_connections}
+          icon={<NetworkCheck fontSize="large" />}
+          color={theme.palette.primary.main}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <StatCard
+          title="Allowed Traffic"
+          value={stats.allowed}
+          icon={<CheckCircle fontSize="large" />}
+          color={theme.palette.success.main}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <StatCard
+          title="Blocked Threats"
+          value={stats.denied}
+          icon={<Cancel fontSize="large" />}
+          color={theme.palette.error.main}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
+        <StatCard
+          title="Active Rules"
+          value={stats.active_rules}
+          icon={<Security fontSize="large" />}
+          color={theme.palette.secondary.main}
+        />
       </Grid>
 
-      <Grid item xs={12} sm={6} md={3}>
-        <Card>
-          <CardContent>
-            <Box display="flex" alignItems="center" justifyContent="space-between">
-              <Box>
-                <Typography color="textSecondary" gutterBottom>
-                  Allowed
-                </Typography>
-                <Typography variant="h4" color="success.main">
-                  {stats.allowed}
-                </Typography>
+      {/* Main Charts Section - Big Charts */}
+      <Grid item xs={12} lg={8}>
+        <Paper sx={{ p: 3, height: 500, display: 'flex', flexDirection: 'column' }}>
+          <Box display="flex" alignItems="center" mb={2}>
+            <Apps sx={{ mr: 1, color: COLORS.apps }} />
+            <Typography variant="h6">Top Applications</Typography>
+          </Box>
+          <Box flexGrow={1} width="100%" height="100%">
+            {appChartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={appChartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
+                  <XAxis dataKey="name" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} />
+                  <YAxis stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} />
+                  <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
+                  <Bar dataKey="count" fill={COLORS.apps} radius={[4, 4, 0, 0]} barSize={40} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <Box display="flex" alignItems="center" justifyContent="center" height="100%">
+                <Typography color="textSecondary">No application data available</Typography>
               </Box>
-              <CheckCircle sx={{ fontSize: 48, color: 'success.main' }} />
-            </Box>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid item xs={12} sm={6} md={3}>
-        <Card>
-          <CardContent>
-            <Box display="flex" alignItems="center" justifyContent="space-between">
-              <Box>
-                <Typography color="textSecondary" gutterBottom>
-                  Denied
-                </Typography>
-                <Typography variant="h4" color="error.main">
-                  {stats.denied}
-                </Typography>
-              </Box>
-              <Cancel sx={{ fontSize: 48, color: 'error.main' }} />
-            </Box>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid item xs={12} sm={6} md={3}>
-        <Card>
-          <CardContent>
-            <Box display="flex" alignItems="center" justifyContent="space-between">
-              <Box>
-                <Typography color="textSecondary" gutterBottom>
-                  Active Rules
-                </Typography>
-                <Typography variant="h4">{stats.active_rules}</Typography>
-              </Box>
-              <Security sx={{ fontSize: 48, color: 'primary.main' }} />
-            </Box>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      {/* Pie Chart */}
-      <Grid item xs={12} md={6} lg={4}>
-        <Paper sx={{ p: 3, height: 350 }}>
-          <Typography variant="h6" gutterBottom>
-            Connection Statistics
-          </Typography>
-          <ResponsiveContainer width="100%" height="90%">
-            <PieChart>
-              <Pie
-                data={pieData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                outerRadius={80}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {pieData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
+            )}
+          </Box>
         </Paper>
       </Grid>
 
-      {/* Applications Bar Chart */}
-      <Grid item xs={12} md={6} lg={4}>
-        <Paper sx={{ p: 3, height: 350 }}>
-          <Typography variant="h6" gutterBottom>
-            Top Applications
-          </Typography>
-          {appChartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height="90%">
-              <BarChart data={appChartData} layout="horizontal">
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  type="number" 
-                  scale="log" 
-                  domain={['dataMin', 'dataMax']}
-                  allowDataOverflow
-                />
-                <YAxis 
-                  type="category" 
-                  dataKey="name" 
-                  width={80}
-                  tick={{ fontSize: 12 }}
-                />
-                <Tooltip formatter={(value) => [value, 'Requests']} />
-                <Bar dataKey="count" fill="#00e676" />
-              </BarChart>
+      <Grid item xs={12} lg={4}>
+        <Paper sx={{ p: 3, height: 500, display: 'flex', flexDirection: 'column' }}>
+          <Box display="flex" alignItems="center" mb={2}>
+            <TrendingUp sx={{ mr: 1, color: COLORS.allowed }} />
+            <Typography variant="h6">Traffic Distribution</Typography>
+          </Box>
+          <Box flexGrow={1} width="100%" height="100%" position="relative">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={80}
+                  outerRadius={120}
+                  paddingAngle={5}
+                  dataKey="value"
+                  stroke="none"
+                >
+                  {pieData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+                <Legend verticalAlign="bottom" height={36} />
+              </PieChart>
             </ResponsiveContainer>
-          ) : (
-            <Box display="flex" alignItems="center" justifyContent="center" height="90%">
-              <Typography color="textSecondary">
-                No application data available
+             {/* Center Text Overlay */}
+            <Box
+              sx={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -65%)', // Adjust for Legend
+                textAlign: 'center',
+                pointerEvents: 'none',
+              }}
+            >
+              <Typography variant="h4" fontWeight="bold">
+                {stats.total_connections}
+              </Typography>
+              <Typography variant="body2" color="textSecondary">
+                Total Events
               </Typography>
             </Box>
-          )}
+          </Box>
         </Paper>
       </Grid>
 
-      {/* Domains Bar Chart */}
-      <Grid item xs={12} md={6} lg={4}>
-        <Paper sx={{ p: 3, height: 350 }}>
-          <Typography variant="h6" gutterBottom>
-            Top Domains
-          </Typography>
-          {domainChartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height="90%">
-              <BarChart data={domainChartData} layout="horizontal">
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  type="number" 
-                  scale="log" 
-                  domain={['dataMin', 'dataMax']}
-                  allowDataOverflow
-                />
-                <YAxis 
-                  type="category" 
-                  dataKey="name" 
-                  width={120}
-                  tick={{ fontSize: 10 }}
-                />
-                <Tooltip formatter={(value) => [value, 'Connections']} />
-                <Bar dataKey="count" fill="#ff9800" />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <Box display="flex" alignItems="center" justifyContent="center" height="90%">
-              <Typography color="textSecondary">
-                No domain data available
-              </Typography>
-            </Box>
-          )}
-        </Paper>
-      </Grid>
-
-      {/* Recent Connections */}
+      {/* Domain Bar Chart (Secondary Large Chart) */}
       <Grid item xs={12}>
-        <Paper sx={{ p: 3, maxHeight: 300, overflow: 'auto' }}>
-          <Typography variant="h6" gutterBottom>
-            Recent Connections
-          </Typography>
-          <List sx={{ py: 0 }}>
+        <Paper sx={{ p: 3, height: 400, display: 'flex', flexDirection: 'column' }}>
+           <Box display="flex" alignItems="center" mb={2}>
+            <Dns sx={{ mr: 1, color: COLORS.domains }} />
+            <Typography variant="h6">Top Domains</Typography>
+          </Box>
+          <Box flexGrow={1} width="100%" height="100%">
+            {domainChartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={domainChartData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
+                  <XAxis type="number" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} />
+                  <YAxis
+                    dataKey="name"
+                    type="category"
+                    width={150}
+                    stroke={COLORS.text}
+                    tick={{ fill: COLORS.text, fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
+                  <Bar dataKey="count" fill={COLORS.domains} radius={[0, 4, 4, 0]} barSize={20} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <Box display="flex" alignItems="center" justifyContent="center" height="100%">
+                <Typography color="textSecondary">No domain data available</Typography>
+              </Box>
+            )}
+          </Box>
+        </Paper>
+      </Grid>
+
+      {/* Recent Connections Log */}
+      <Grid item xs={12}>
+        <Paper sx={{ overflow: 'hidden' }}>
+          <Box sx={{ p: 2, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider' }}>
+             <Typography variant="h6">Recent Activity</Typography>
+          </Box>
+          <List sx={{ p: 0, maxHeight: 400, overflow: 'auto' }}>
             {recentConnections.map((conn, index) => (
               <ListItem
                 key={index}
                 sx={{
-                  borderLeft: 3,
+                  borderLeft: '4px solid',
                   borderColor: conn.action === 'allow' ? 'success.main' : 'error.main',
-                  mb: 0.5,
-                  bgcolor: 'background.default',
-                  minHeight: 48,
-                  py: 0.5,
+                  bgcolor: index % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent',
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' },
                 }}
               >
-                <ListItemText
-                  primary={
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      {`${conn.executable.split('/').pop()} → ${conn.dest_host || conn.dest_ip}:${conn.dest_port}`}
+                <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                  <Box sx={{ minWidth: 80 }}>
+                    <Chip
+                      label={conn.action.toUpperCase()}
+                      size="small"
+                      color={conn.action === 'allow' ? 'success' : 'error'}
+                      variant="outlined"
+                      sx={{ fontWeight: 'bold', fontSize: '0.7rem', height: 24 }}
+                    />
+                  </Box>
+                  
+                  <Box sx={{ flexGrow: 1, ml: 2 }}>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                       {conn.executable.split('/').pop()}
                     </Typography>
-                  }
-                  secondary={
-                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.25 }}>
-                      <Typography variant="caption" color="textSecondary">
-                        {format(new Date(conn.timestamp), 'HH:mm:ss')}
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: conn.action === 'allow' ? 'success.main' : 'error.main',
-                          fontWeight: 600,
-                        }}
-                      >
-                        {conn.action.toUpperCase()}
-                      </Typography>
-                      <Typography variant="caption" color="textSecondary">
-                        {conn.protocol}
-                      </Typography>
-                    </Box>
-                  }
-                />
+                    <Typography variant="caption" color="textSecondary" sx={{ fontFamily: 'monospace' }}>
+                       {conn.dest_host || conn.dest_ip}:{conn.dest_port} ({conn.protocol})
+                    </Typography>
+                  </Box>
+
+                  <Typography variant="caption" color="textSecondary" sx={{ fontFamily: 'monospace' }}>
+                    {format(new Date(conn.timestamp), 'HH:mm:ss')}
+                  </Typography>
+                </Box>
               </ListItem>
             ))}
             {recentConnections.length === 0 && (
-              <ListItem sx={{ minHeight: 48 }}>
-                <ListItemText
-                  primary="No recent connections"
-                  secondary="Connection events will appear here"
-                />
+              <ListItem>
+                <ListItemText primary="No recent connections" secondary="Activity will appear here..." />
               </ListItem>
             )}
           </List>
