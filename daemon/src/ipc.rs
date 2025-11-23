@@ -16,6 +16,7 @@ pub enum IpcMessage {
     UpdateRule { rule: serde_json::Value },
     DeleteRule { rule_id: i64 },
     GetHistory { limit: i64 },
+    GetHistorySince { timestamp: String },
     GetStats,
     RespondToPrompt { prompt_id: String, action: String, remember: bool, duration: String },
 

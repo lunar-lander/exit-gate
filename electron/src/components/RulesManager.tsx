@@ -120,7 +120,7 @@ const RulesManager: React.FC<RulesManagerProps> = ({
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box display="flex" flexDirection={{ xs: 'column', sm: 'row' }} gap={2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} mb={3}>
         <Typography variant="h5">Firewall Rules</Typography>
         <Button
           variant="contained"
@@ -133,7 +133,7 @@ const RulesManager: React.FC<RulesManagerProps> = ({
       </Box>
 
       <TableContainer component={Paper}>
-        <Table>
+        <Table size="small">
           <TableHead>
             <TableRow>
               <TableCell>Enabled</TableCell>
@@ -148,55 +148,73 @@ const RulesManager: React.FC<RulesManagerProps> = ({
           </TableHead>
           <TableBody>
             {rules.map((rule) => (
-              <TableRow key={rule.id}>
-                <TableCell>
+              <TableRow key={rule.id} sx={{ '& > *': { borderBottom: 'unset' } }}>
+                <TableCell sx={{ py: 1 }}>
                   <Switch
                     checked={rule.enabled}
                     onChange={() => handleToggleEnabled(rule)}
                     color="primary"
-                  />
-                </TableCell>
-                <TableCell>{rule.name}</TableCell>
-                <TableCell>
-                  <Chip
-                    icon={rule.action === 'allow' ? <CheckCircle /> : <Block />}
-                    label={rule.action.toUpperCase()}
-                    color={rule.action === 'allow' ? 'success' : 'error'}
                     size="small"
                   />
                 </TableCell>
-                <TableCell>
-                  <Box display="flex" gap={0.5} flexWrap="wrap">
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="body2" fontWeight="medium">
+                    {rule.name}
+                  </Typography>
+                </TableCell>
+                <TableCell sx={{ py: 1 }}>
+                  <Chip
+                    icon={rule.action === 'allow' ? <CheckCircle sx={{ fontSize: 14 }} /> : <Block sx={{ fontSize: 14 }} />}
+                    label={rule.action.toUpperCase()}
+                    color={rule.action === 'allow' ? 'success' : 'error'}
+                    size="small"
+                    sx={{ height: 20, fontSize: 10 }}
+                  />
+                </TableCell>
+                <TableCell sx={{ py: 1 }}>
+                  <Box display="flex" gap={0.25} flexWrap="wrap">
                     {rule.criteria.executable && (
-                      <Chip label={`exe: ${rule.criteria.executable.split('/').pop()}`} size="small" />
+                      <Chip label={`exe: ${rule.criteria.executable.split('/').pop()}`} size="small" sx={{ height: 18, fontSize: 9 }} />
                     )}
                     {rule.criteria.dest_host && (
-                      <Chip label={`host: ${rule.criteria.dest_host}`} size="small" />
+                      <Chip label={`host: ${rule.criteria.dest_host}`} size="small" sx={{ height: 18, fontSize: 9 }} />
                     )}
                     {rule.criteria.dest_ip && (
-                      <Chip label={`ip: ${rule.criteria.dest_ip}`} size="small" />
+                      <Chip label={`ip: ${rule.criteria.dest_ip}`} size="small" sx={{ height: 18, fontSize: 9 }} />
                     )}
                     {rule.criteria.dest_port && (
-                      <Chip label={`port: ${rule.criteria.dest_port}`} size="small" />
+                      <Chip label={`port: ${rule.criteria.dest_port}`} size="small" sx={{ height: 18, fontSize: 9 }} />
                     )}
                     {rule.criteria.protocol && (
-                      <Chip label={rule.criteria.protocol} size="small" />
+                      <Chip label={rule.criteria.protocol} size="small" sx={{ height: 18, fontSize: 9 }} />
                     )}
                   </Box>
                 </TableCell>
-                <TableCell>{rule.duration}</TableCell>
-                <TableCell>{rule.priority}</TableCell>
-                <TableCell>{rule.hit_count}</TableCell>
-                <TableCell align="right">
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="body2">
+                    {rule.duration}
+                  </Typography>
+                </TableCell>
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="body2">
+                    {rule.priority}
+                  </Typography>
+                </TableCell>
+                <TableCell sx={{ py: 1 }}>
+                  <Typography variant="body2">
+                    {rule.hit_count}
+                  </Typography>
+                </TableCell>
+                <TableCell align="right" sx={{ py: 1 }}>
                   <IconButton size="small" onClick={() => handleOpenDialog(rule)}>
-                    <Edit />
+                    <Edit fontSize="small" />
                   </IconButton>
                   <IconButton
                     size="small"
                     color="error"
                     onClick={() => rule.id && onDeleteRule(rule.id)}
                   >
-                    <Delete />
+                    <Delete fontSize="small" />
                   </IconButton>
                 </TableCell>
               </TableRow>

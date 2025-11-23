@@ -3,11 +3,12 @@ mod rule;
 mod db;
 mod process;
 mod ipc;
+mod ebpf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::sync::mpsc;
-use tracing::{info, error, warn, debug};
+use tracing::{info, error, warn, debug, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use chrono::Utc;
 use std::net::IpAddr;
@@ -18,8 +19,8 @@ use tokio::sync::RwLock;
 use crate::config::Config;
 use crate::rule::{Rule, RuleEngine, Action, Duration, RuleCriteria, ConnectionInfo};
 use crate::db::Database;
-use crate::process::ProcessInfo;
 use crate::ipc::{IpcServer, IpcMessage};
+use crate::ebpf::ConnectionEvent;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -71,13 +72,13 @@ async fn main() -> Result<()> {
     let config = Config::load_or_default(args.config.as_deref())
         .context("Failed to load configuration")?;
 
-    info!("Configuration loaded");
+    info!("Configuration loaded. Database path: {}", config.database.db_path);
 
     // Initialize database
     let db = Database::new(&config.database.db_path).await
         .context("Failed to initialize database")?;
 
-    info!("Database initialized at {}", config.database.db_path);
+    info!("Database initialized");
 
     // Load rules from database
     let mut rule_engine = RuleEngine::new();
@@ -126,10 +127,42 @@ async fn main() -> Result<()> {
 
     info!("IPC server started on {}", config.daemon.socket_path);
 
-    // TODO: Load and attach eBPF programs
-    // This would use libbpf-rs to load the compiled eBPF object
-    // and attach to kprobes. Once implemented, eBPF events will come
-    // from the ring buffer and be processed by the event handler.
+    // Start eBPF monitor
+    let (ebpf_tx, mut ebpf_rx) = mpsc::channel::<ConnectionEvent>(10000);
+    let bpf_path = config.daemon.bpf_path.clone();
+
+    let ebpf_handle = tokio::spawn(async move {
+        // Run eBPF monitor in a blocking task since libbpf-rs isn't async
+        let result = tokio::task::spawn_blocking(move || {
+            // Create a runtime for the blocking context
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                if let Err(e) = ebpf::start_ebpf_monitor(
+                    format!("{}/network_monitor.bpf.o", bpf_path),
+                    ebpf_tx,
+                ).await {
+                    error!("eBPF monitor error: {}", e);
+                }
+            });
+        }).await;
+
+        if let Err(e) = result {
+            error!("eBPF task panicked: {}", e);
+        }
+    });
+
+    // Handle eBPF events
+    let state_for_ebpf = state.clone();
+    let ipc_resp_tx_for_ebpf = ipc_resp_tx.clone();
+    let ebpf_event_handler = tokio::spawn(async move {
+        while let Some(event) = ebpf_rx.recv().await {
+            handle_ebpf_event(
+                state_for_ebpf.clone(),
+                ipc_resp_tx_for_ebpf.clone(),
+                event,
+            ).await;
+        }
+    });
 
     info!("Daemon initialized and ready");
 
@@ -140,6 +173,12 @@ async fn main() -> Result<()> {
         }
         _ = ipc_handler => {
             error!("IPC handler terminated");
+        }
+        _ = ebpf_handle => {
+            error!("eBPF monitor terminated");
+        }
+        _ = ebpf_event_handler => {
+            error!("eBPF event handler terminated");
         }
         _ = tokio::signal::ctrl_c() => {
             info!("Received Ctrl+C, shutting down...");
@@ -287,6 +326,39 @@ async fn handle_ipc_messages(
                 }
             }
 
+            IpcMessage::GetHistorySince { timestamp } => {
+                match timestamp.parse::<chrono::DateTime<Utc>>() {
+                    Ok(since) => {
+                        match state.db.get_connection_history_since(since).await {
+                            Ok(entries) => {
+                                let _ = resp_tx.send((
+                                    "broadcast".to_string(),
+                                    IpcMessage::HistoryData { entries },
+                                )).await;
+                            }
+                            Err(e) => {
+                                error!("Failed to get history since {}: {}", timestamp, e);
+                                let _ = resp_tx.send((
+                                    "broadcast".to_string(),
+                                    IpcMessage::Error {
+                                        message: format!("Failed to get history: {}", e),
+                                    },
+                                )).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                         error!("Invalid timestamp format: {}", e);
+                         let _ = resp_tx.send((
+                            "broadcast".to_string(),
+                            IpcMessage::Error {
+                                message: format!("Invalid timestamp: {}", e),
+                            },
+                        )).await;
+                    }
+                }
+            }
+
             IpcMessage::GetStats => {
                 let stats_lock = state.stats.read().await;
                 let stats = serde_json::json!({
@@ -405,9 +477,157 @@ async fn handle_ipc_messages(
     }
 }
 
-// TODO: Implement eBPF event handler
-// This function will be called when eBPF ring buffer receives connection events
-// For now, the daemon is ready but will only process manually triggered events
+async fn handle_ebpf_event(
+    state: Arc<DaemonState>,
+    ipc_resp_tx: mpsc::Sender<(String, IpcMessage)>,
+    event: ConnectionEvent,
+) {
+    // Perform blocking /proc reads in a separate thread
+    let pid = event.pid;
+    let event_comm = event.comm_string(); // Clone string before moving
+    
+    let proc_info = tokio::task::spawn_blocking(move || {
+        let executable = match std::fs::read_link(format!("/proc/{}/exe", pid)) {
+            Ok(path) => path.to_string_lossy().to_string(),
+            Err(_) => event_comm,
+        };
+
+        let cmdline = match std::fs::read_to_string(format!("/proc/{}/cmdline", pid)) {
+            Ok(cmd) => cmd.replace('\0', " ").trim().to_string(),
+            Err(_) => executable.clone(),
+        };
+        
+        (executable, cmdline)
+    }).await;
+
+    let (executable, cmdline) = match proc_info {
+        Ok(info) => info,
+        Err(e) => {
+            error!("Failed to join blocking task: {}", e);
+            return;
+        }
+    };
+
+    // Parse destination IP
+    let dest_ip = event.dest_ip_string();
+    let dest_ip_parsed: std::net::IpAddr = match dest_ip.parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            debug!("Failed to parse IP: {}", dest_ip);
+            return;
+        }
+    };
+
+    let conn_info = ConnectionInfo {
+        pid: event.pid,
+        uid: event.uid,
+        gid: event.gid,
+        executable: executable.clone(),
+        cmdline,
+        dest_ip: dest_ip_parsed,
+        dest_port: event.dport,
+        dest_host: None, // DNS resolution would be async
+        protocol: event.protocol_string(),
+        process_start_time: 0,
+    };
+
+    trace!(
+        "Connection: {} ({}) -> {}:{} [{}]",
+        executable, event.pid, dest_ip, event.dport, event.protocol_string()
+    );
+
+    // Check rules using READ lock first for better concurrency
+    let engine = state.rule_engine.read().await;
+    let action = engine.evaluate(&conn_info);
+    drop(engine); // Release read lock immediately
+
+    if let Some(action) = action {
+        debug!("Connection matched rule: {:?}", action);
+
+        // Update stats (requires write lock, but short duration)
+        let mut stats = state.stats.write().await;
+        stats.total_connections += 1;
+        if matches!(action, Action::Allow) {
+            stats.allowed += 1;
+        } else {
+            stats.denied += 1;
+        }
+        drop(stats);
+
+        // Log to database
+        let _ = state.db.save_connection_history(
+            Utc::now(),
+            conn_info.pid,
+            conn_info.uid,
+            conn_info.gid,
+            &conn_info.executable,
+            &conn_info.cmdline,
+            &conn_info.dest_ip.to_string(),
+            conn_info.dest_port,
+            conn_info.dest_host.as_deref(),
+            &conn_info.protocol,
+            &action,
+            None,
+        ).await;
+
+        // Send connection event to GUI
+        let _ = ipc_resp_tx.send((
+            "broadcast".to_string(),
+            IpcMessage::ConnectionEvent {
+                timestamp: Utc::now().to_rfc3339(),
+                pid: conn_info.pid,
+                executable: conn_info.executable.clone(),
+                dest_ip: conn_info.dest_ip.to_string(),
+                dest_port: conn_info.dest_port,
+                dest_host: conn_info.dest_host.clone(),
+                protocol: conn_info.protocol.clone(),
+                action: format!("{:?}", action).to_lowercase(),
+            },
+        )).await;
+
+        // Send updated stats
+        // To reduce IPC traffic, maybe don't send stats on every single packet?
+        // But for now, let's keep it to maintain behavior.
+        // Optimization: clone stats inside the lock to minimize hold time
+        let stats_lock = state.stats.read().await;
+        let stats_json = serde_json::json!({
+            "total_connections": stats_lock.total_connections,
+            "allowed": stats_lock.allowed,
+            "denied": stats_lock.denied,
+            "active_rules": state.rule_engine.read().await.get_rules().len(),
+        });
+        drop(stats_lock);
+
+        let _ = ipc_resp_tx.send((
+            "broadcast".to_string(),
+            IpcMessage::StatsData { stats: stats_json },
+        )).await;
+    } else {
+        // No rule matched, send prompt to GUI
+        let prompt_id = uuid::Uuid::new_v4().to_string();
+
+        state.pending_prompts.write().await.insert(prompt_id.clone(), conn_info.clone());
+
+        let _ = ipc_resp_tx.send((
+            "broadcast".to_string(),
+            IpcMessage::ConnectionPrompt {
+                prompt_id,
+                pid: conn_info.pid,
+                uid: conn_info.uid,
+                executable: conn_info.executable,
+                cmdline: conn_info.cmdline,
+                dest_ip: conn_info.dest_ip.to_string(),
+                dest_port: conn_info.dest_port,
+                dest_host: conn_info.dest_host,
+                protocol: conn_info.protocol,
+            },
+        )).await;
+
+        debug!("Connection prompt sent to GUI");
+    }
+}
+
+// Legacy function - kept for reference
 #[allow(dead_code)]
 async fn handle_connection_event(
     state: Arc<DaemonState>,

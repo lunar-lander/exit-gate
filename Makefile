@@ -1,6 +1,7 @@
 .PHONY: all build package clean install uninstall daemon ebpf electron
 
-all: build
+all:
+	make build && sudo make install && make package
 
 build:
 	@./build.sh

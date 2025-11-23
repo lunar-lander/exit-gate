@@ -87,9 +87,9 @@ declare global {
       addRule: (rule: Rule) => Promise<void>;
       updateRule: (rule: Rule) => Promise<void>;
       deleteRule: (ruleId: number) => Promise<void>;
-      getHistory: (limit: number) => Promise<void>;
-      getStats: () => Promise<void>;
-      respondToPrompt: (
+        getHistory: (limit: number) => Promise<void>;
+        getHistorySince: (timestamp: string) => Promise<void>;
+        getStats: () => Promise<void>;      respondToPrompt: (
         promptId: string,
         action: string,
         remember: boolean,

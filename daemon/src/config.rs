@@ -45,7 +45,7 @@ fn default_socket_path() -> String {
 }
 
 fn default_log_level() -> String {
-    "info".to_string()
+    "warn".to_string()
 }
 
 fn default_bpf_path() -> String {

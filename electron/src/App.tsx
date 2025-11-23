@@ -18,14 +18,88 @@ import ConnectionHistory from './components/ConnectionHistory';
 import ConnectionPrompt from './components/ConnectionPrompt';
 import { Rule, ConnectionPrompt as ConnectionPromptType, HistoryEntry, Stats } from './types';
 
+// Modern Pastel & Dark Theme
 const theme = createTheme({
   palette: {
     mode: 'dark',
+    background: {
+      default: '#0f172a', // Slate 900
+      paper: '#1e293b',   // Slate 800
+    },
     primary: {
-      main: '#00e676',
+      main: '#818cf8', // Indigo 400
     },
     secondary: {
-      main: '#ff1744',
+      main: '#c084fc', // Purple 400
+    },
+    success: {
+      main: '#34d399', // Emerald 400
+    },
+    error: {
+      main: '#f87171', // Red 400
+    },
+    text: {
+      primary: '#f8fafc', // Slate 50
+      secondary: '#94a3b8', // Slate 400
+    },
+  },
+  typography: {
+    fontFamily: [
+      'Inter',
+      '-apple-system',
+      'BlinkMacSystemFont',
+      '"Segoe UI"',
+      'Roboto',
+      '"Helvetica Neue"',
+      'Arial',
+      'sans-serif',
+    ].join(','),
+    h4: {
+      fontWeight: 600,
+      letterSpacing: '-0.02em',
+    },
+    h6: {
+      fontWeight: 600,
+      letterSpacing: '-0.01em',
+    },
+  },
+  shape: {
+    borderRadius: 16,
+  },
+  components: {
+    MuiAppBar: {
+      styleOverrides: {
+        root: {
+          backgroundColor: '#1e293b',
+          borderBottom: '1px solid rgba(255,255,255,0.05)',
+          backgroundImage: 'none',
+        },
+      },
+    },
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          backgroundImage: 'none',
+          backgroundColor: '#1e293b',
+          border: '1px solid rgba(255,255,255,0.05)',
+        },
+      },
+    },
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          backgroundImage: 'none',
+        },
+      },
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          fontWeight: 600,
+          fontSize: '0.95rem',
+        },
+      },
     },
   },
 });
@@ -45,7 +119,6 @@ function App() {
   useEffect(() => {
     // Request initial data
     window.electron.getRules();
-    window.electron.getHistory(100);
     window.electron.getStats();
 
     // Listen for daemon messages
@@ -71,7 +144,7 @@ function App() {
 
         case 'ConnectionEvent':
           // Add to history
-          setHistory((prev) => [message as unknown as HistoryEntry, ...prev].slice(0, 100));
+          setHistory((prev) => [message as unknown as HistoryEntry, ...prev].slice(0, 50000));
           break;
 
         case 'Success':
@@ -112,12 +185,12 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: 'background.default' }}>
         <AppBar position="static" elevation={0}>
           <Toolbar>
-            <Shield sx={{ mr: 2 }} />
+            <Shield sx={{ mr: 2, color: 'primary.main' }} />
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              Exit Gate - Linux Application Firewall
+              Exit Gate
             </Typography>
           </Toolbar>
           <Tabs
@@ -132,8 +205,8 @@ function App() {
           </Tabs>
         </AppBar>
 
-        <Container maxWidth={false} sx={{ mt: 3, mb: 3, flexGrow: 1, overflow: 'auto' }}>
-          {currentTab === 0 && <Dashboard stats={stats} recentConnections={history.slice(0, 10)} />}
+        <Container maxWidth="xl" sx={{ mt: { xs: 2, md: 4 }, mb: 4, flexGrow: 1, overflow: 'auto', px: { xs: 2, md: 4 } }}>
+          {currentTab === 0 && <Dashboard stats={stats} recentConnections={history} />}
           {currentTab === 1 && (
             <RulesManager
               rules={rules}
