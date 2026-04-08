@@ -1,26 +1,25 @@
 mod config;
-mod rule;
 mod db;
-mod process;
-mod ipc;
 mod ebpf;
+mod ipc;
+mod process;
+mod rule;
 
 use anyhow::{Context, Result};
-use clap::Parser;
-use tokio::sync::mpsc;
-use tracing::{info, error, warn, debug, trace};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use chrono::Utc;
-use std::net::IpAddr;
+use clap::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use tracing::{debug, error, info, trace, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::Config;
-use crate::rule::{Rule, RuleEngine, Action, Duration, RuleCriteria, ConnectionInfo};
 use crate::db::Database;
-use crate::ipc::{IpcServer, IpcMessage};
 use crate::ebpf::ConnectionEvent;
+use crate::ipc::{IpcMessage, IpcServer};
+use crate::rule::{Action, ConnectionInfo, Duration, Rule, RuleCriteria, RuleEngine};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -44,12 +43,23 @@ struct Stats {
     denied: u64,
 }
 
+/// Key used to deduplicate TCP events fired by both `kprobe/tcp_connect` and
+/// `kprobe/tcp_v4_connect` (or `tcp_v6_connect`) for the same connection.
+#[derive(Hash, PartialEq, Eq)]
+struct ConnKey {
+    pid: u32,
+    dest_ip: std::net::IpAddr,
+    dest_port: u16,
+}
+
 struct DaemonState {
     rule_engine: RwLock<RuleEngine>,
     pending_prompts: RwLock<HashMap<String, ConnectionInfo>>,
     stats: RwLock<Stats>,
     db: Database,
-    config: Config,
+    /// Recently seen (pid, dest_ip, dest_port) tuples; prevents duplicate events
+    /// emitted when both tcp_connect and tcp_v4/v6_connect kprobes fire together.
+    recent_tcp_conns: RwLock<lru::LruCache<ConnKey, ()>>,
 }
 
 #[tokio::main]
@@ -69,20 +79,26 @@ async fn main() -> Result<()> {
     info!("Exit Gate daemon starting...");
 
     // Load configuration
-    let config = Config::load_or_default(args.config.as_deref())
-        .context("Failed to load configuration")?;
+    let config =
+        Config::load_or_default(args.config.as_deref()).context("Failed to load configuration")?;
 
-    info!("Configuration loaded. Database path: {}", config.database.db_path);
+    info!(
+        "Configuration loaded. Database path: {}",
+        config.database.db_path
+    );
 
     // Initialize database
-    let db = Database::new(&config.database.db_path).await
+    let db = Database::new(&config.database.db_path)
+        .await
         .context("Failed to initialize database")?;
 
     info!("Database initialized");
 
     // Load rules from database
     let mut rule_engine = RuleEngine::new();
-    let rules = db.load_rules().await
+    let rules = db
+        .load_rules()
+        .await
         .context("Failed to load rules from database")?;
 
     info!("Loaded {} rules from database", rules.len());
@@ -101,7 +117,9 @@ async fn main() -> Result<()> {
             denied: 0,
         }),
         db,
-        config: config.clone(),
+        recent_tcp_conns: RwLock::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(4096).unwrap(),
+        )),
     });
 
     // Create IPC channels
@@ -137,14 +155,15 @@ async fn main() -> Result<()> {
             // Create a runtime for the blocking context
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async {
-                if let Err(e) = ebpf::start_ebpf_monitor(
-                    format!("{}/network_monitor.bpf.o", bpf_path),
-                    ebpf_tx,
-                ).await {
+                if let Err(e) =
+                    ebpf::start_ebpf_monitor(format!("{}/network_monitor.bpf.o", bpf_path), ebpf_tx)
+                        .await
+                {
                     error!("eBPF monitor error: {}", e);
                 }
             });
-        }).await;
+        })
+        .await;
 
         if let Err(e) = result {
             error!("eBPF task panicked: {}", e);
@@ -156,11 +175,7 @@ async fn main() -> Result<()> {
     let ipc_resp_tx_for_ebpf = ipc_resp_tx.clone();
     let ebpf_event_handler = tokio::spawn(async move {
         while let Some(event) = ebpf_rx.recv().await {
-            handle_ebpf_event(
-                state_for_ebpf.clone(),
-                ipc_resp_tx_for_ebpf.clone(),
-                event,
-            ).await;
+            handle_ebpf_event(state_for_ebpf.clone(), ipc_resp_tx_for_ebpf.clone(), event).await;
         }
     });
 
@@ -210,171 +225,184 @@ async fn handle_ipc_messages(
                     .map(|r| serde_json::to_value(r).unwrap())
                     .collect();
 
-                let _ = resp_tx.send((
-                    "broadcast".to_string(),
-                    IpcMessage::RulesList { rules },
-                )).await;
+                let _ = resp_tx
+                    .send(("broadcast".to_string(), IpcMessage::RulesList { rules }))
+                    .await;
             }
 
-            IpcMessage::AddRule { rule } => {
-                match serde_json::from_value::<Rule>(rule) {
-                    Ok(mut new_rule) => {
-                        match state.db.save_rule(&new_rule).await {
-                            Ok(id) => {
-                                new_rule.id = Some(id);
-                                state.rule_engine.write().await.add_rule(new_rule);
-                                let _ = resp_tx.send((
-                                    "broadcast".to_string(),
-                                    IpcMessage::Success {
-                                        message: format!("Rule added with ID {}", id),
-                                    },
-                                )).await;
-                            }
-                            Err(e) => {
-                                error!("Failed to save rule: {}", e);
-                                let _ = resp_tx.send((
-                                    "broadcast".to_string(),
-                                    IpcMessage::Error {
-                                        message: format!("Failed to save rule: {}", e),
-                                    },
-                                )).await;
-                            }
-                        }
+            IpcMessage::AddRule { rule } => match serde_json::from_value::<Rule>(rule) {
+                Ok(mut new_rule) => match state.db.save_rule(&new_rule).await {
+                    Ok(id) => {
+                        new_rule.id = Some(id);
+                        state.rule_engine.write().await.add_rule(new_rule);
+                        let _ = resp_tx
+                            .send((
+                                "broadcast".to_string(),
+                                IpcMessage::Success {
+                                    message: format!("Rule added with ID {}", id),
+                                },
+                            ))
+                            .await;
                     }
                     Err(e) => {
-                        error!("Failed to deserialize rule: {}", e);
-                        let _ = resp_tx.send((
+                        error!("Failed to save rule: {}", e);
+                        let _ = resp_tx
+                            .send((
+                                "broadcast".to_string(),
+                                IpcMessage::Error {
+                                    message: format!("Failed to save rule: {}", e),
+                                },
+                            ))
+                            .await;
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to deserialize rule: {}", e);
+                    let _ = resp_tx
+                        .send((
                             "broadcast".to_string(),
                             IpcMessage::Error {
                                 message: format!("Invalid rule format: {}", e),
                             },
-                        )).await;
-                    }
+                        ))
+                        .await;
                 }
-            }
+            },
 
-            IpcMessage::UpdateRule { rule } => {
-                match serde_json::from_value::<Rule>(rule) {
-                    Ok(updated_rule) => {
-                        match state.db.update_rule(&updated_rule).await {
-                            Ok(_) => {
-                                state.rule_engine.write().await.update_rule(updated_rule);
-                                let _ = resp_tx.send((
-                                    "broadcast".to_string(),
-                                    IpcMessage::Success {
-                                        message: "Rule updated".to_string(),
-                                    },
-                                )).await;
-                            }
-                            Err(e) => {
-                                error!("Failed to update rule: {}", e);
-                                let _ = resp_tx.send((
-                                    "broadcast".to_string(),
-                                    IpcMessage::Error {
-                                        message: format!("Failed to update rule: {}", e),
-                                    },
-                                )).await;
-                            }
-                        }
+            IpcMessage::UpdateRule { rule } => match serde_json::from_value::<Rule>(rule) {
+                Ok(updated_rule) => match state.db.update_rule(&updated_rule).await {
+                    Ok(_) => {
+                        state.rule_engine.write().await.update_rule(updated_rule);
+                        let _ = resp_tx
+                            .send((
+                                "broadcast".to_string(),
+                                IpcMessage::Success {
+                                    message: "Rule updated".to_string(),
+                                },
+                            ))
+                            .await;
                     }
                     Err(e) => {
-                        error!("Failed to deserialize rule: {}", e);
+                        error!("Failed to update rule: {}", e);
+                        let _ = resp_tx
+                            .send((
+                                "broadcast".to_string(),
+                                IpcMessage::Error {
+                                    message: format!("Failed to update rule: {}", e),
+                                },
+                            ))
+                            .await;
                     }
+                },
+                Err(e) => {
+                    error!("Failed to deserialize rule: {}", e);
                 }
-            }
+            },
 
-            IpcMessage::DeleteRule { rule_id } => {
-                match state.db.delete_rule(rule_id).await {
-                    Ok(_) => {
-                        state.rule_engine.write().await.remove_rule(rule_id);
-                        let _ = resp_tx.send((
+            IpcMessage::DeleteRule { rule_id } => match state.db.delete_rule(rule_id).await {
+                Ok(_) => {
+                    state.rule_engine.write().await.remove_rule(rule_id);
+                    let _ = resp_tx
+                        .send((
                             "broadcast".to_string(),
                             IpcMessage::Success {
                                 message: "Rule deleted".to_string(),
                             },
-                        )).await;
-                    }
-                    Err(e) => {
-                        error!("Failed to delete rule: {}", e);
-                        let _ = resp_tx.send((
+                        ))
+                        .await;
+                }
+                Err(e) => {
+                    error!("Failed to delete rule: {}", e);
+                    let _ = resp_tx
+                        .send((
                             "broadcast".to_string(),
                             IpcMessage::Error {
                                 message: format!("Failed to delete rule: {}", e),
                             },
-                        )).await;
-                    }
+                        ))
+                        .await;
                 }
-            }
+            },
 
             IpcMessage::GetHistory { limit } => {
                 match state.db.get_connection_history(limit).await {
                     Ok(entries) => {
-                        let _ = resp_tx.send((
-                            "broadcast".to_string(),
-                            IpcMessage::HistoryData { entries },
-                        )).await;
+                        let _ = resp_tx
+                            .send(("broadcast".to_string(), IpcMessage::HistoryData { entries }))
+                            .await;
                     }
                     Err(e) => {
                         error!("Failed to get history: {}", e);
-                        let _ = resp_tx.send((
-                            "broadcast".to_string(),
-                            IpcMessage::Error {
-                                message: format!("Failed to get history: {}", e),
-                            },
-                        )).await;
+                        let _ = resp_tx
+                            .send((
+                                "broadcast".to_string(),
+                                IpcMessage::Error {
+                                    message: format!("Failed to get history: {}", e),
+                                },
+                            ))
+                            .await;
                     }
                 }
             }
 
             IpcMessage::GetHistorySince { timestamp } => {
                 match timestamp.parse::<chrono::DateTime<Utc>>() {
-                    Ok(since) => {
-                        match state.db.get_connection_history_since(since).await {
-                            Ok(entries) => {
-                                let _ = resp_tx.send((
+                    Ok(since) => match state.db.get_connection_history_since(since).await {
+                        Ok(entries) => {
+                            let _ = resp_tx
+                                .send((
                                     "broadcast".to_string(),
                                     IpcMessage::HistoryData { entries },
-                                )).await;
-                            }
-                            Err(e) => {
-                                error!("Failed to get history since {}: {}", timestamp, e);
-                                let _ = resp_tx.send((
+                                ))
+                                .await;
+                        }
+                        Err(e) => {
+                            error!("Failed to get history since {}: {}", timestamp, e);
+                            let _ = resp_tx
+                                .send((
                                     "broadcast".to_string(),
                                     IpcMessage::Error {
                                         message: format!("Failed to get history: {}", e),
                                     },
-                                )).await;
-                            }
+                                ))
+                                .await;
                         }
-                    }
+                    },
                     Err(e) => {
-                         error!("Invalid timestamp format: {}", e);
-                         let _ = resp_tx.send((
-                            "broadcast".to_string(),
-                            IpcMessage::Error {
-                                message: format!("Invalid timestamp: {}", e),
-                            },
-                        )).await;
+                        error!("Invalid timestamp format: {}", e);
+                        let _ = resp_tx
+                            .send((
+                                "broadcast".to_string(),
+                                IpcMessage::Error {
+                                    message: format!("Invalid timestamp: {}", e),
+                                },
+                            ))
+                            .await;
                     }
                 }
             }
 
             IpcMessage::GetStats => {
+                let active_rules = state.rule_engine.read().await.get_rules().len();
                 let stats_lock = state.stats.read().await;
                 let stats = serde_json::json!({
                     "total_connections": stats_lock.total_connections,
                     "allowed": stats_lock.allowed,
                     "denied": stats_lock.denied,
-                    "active_rules": state.rule_engine.read().await.get_rules().len(),
+                    "active_rules": active_rules,
                 });
 
-                let _ = resp_tx.send((
-                    "broadcast".to_string(),
-                    IpcMessage::StatsData { stats },
-                )).await;
+                let _ = resp_tx
+                    .send(("broadcast".to_string(), IpcMessage::StatsData { stats }))
+                    .await;
             }
 
-            IpcMessage::RespondToPrompt { prompt_id, action, remember, duration } => {
+            IpcMessage::RespondToPrompt {
+                prompt_id,
+                action,
+                remember,
+                duration,
+            } => {
                 let mut prompts = state.pending_prompts.write().await;
                 if let Some(conn_info) = prompts.remove(&prompt_id) {
                     let action = if action == "allow" {
@@ -394,20 +422,23 @@ async fn handle_ipc_messages(
                     drop(stats);
 
                     // Save to history
-                    let _ = state.db.save_connection_history(
-                        Utc::now(),
-                        conn_info.pid,
-                        conn_info.uid,
-                        conn_info.gid,
-                        &conn_info.executable,
-                        &conn_info.cmdline,
-                        &conn_info.dest_ip.to_string(),
-                        conn_info.dest_port,
-                        conn_info.dest_host.as_deref(),
-                        &conn_info.protocol,
-                        &action,
-                        None,
-                    ).await;
+                    let _ = state
+                        .db
+                        .save_connection_history(
+                            Utc::now(),
+                            conn_info.pid,
+                            conn_info.uid,
+                            conn_info.gid,
+                            &conn_info.executable,
+                            &conn_info.cmdline,
+                            &conn_info.dest_ip.to_string(),
+                            conn_info.dest_port,
+                            conn_info.dest_host.as_deref(),
+                            &conn_info.protocol,
+                            &action,
+                            None,
+                        )
+                        .await;
 
                     // Create rule if remember is true
                     if remember {
@@ -435,7 +466,11 @@ async fn handle_ipc_messages(
                                 state.rule_engine.write().await.add_rule(new_rule);
                             }
                         } else if duration == Duration::Process {
-                            state.rule_engine.write().await.add_process_rule(conn_info.pid, rule);
+                            state
+                                .rule_engine
+                                .write()
+                                .await
+                                .add_process_rule(conn_info.pid, rule);
                         } else {
                             state.rule_engine.write().await.add_rule(rule);
                         }
@@ -444,26 +479,28 @@ async fn handle_ipc_messages(
                     info!("Prompt {} resolved: {:?}", prompt_id, action);
 
                     // Send updated stats to all clients
+                    let active_rules = state.rule_engine.read().await.get_rules().len();
                     let stats_lock = state.stats.read().await;
                     let stats_json = serde_json::json!({
                         "total_connections": stats_lock.total_connections,
                         "allowed": stats_lock.allowed,
                         "denied": stats_lock.denied,
-                        "active_rules": state.rule_engine.read().await.get_rules().len(),
+                        "active_rules": active_rules,
                     });
                     drop(stats_lock);
 
-                    let _ = resp_tx.send((
-                        "broadcast".to_string(),
-                        IpcMessage::StatsData { stats: stats_json },
-                    )).await;
+                    let _ = resp_tx
+                        .send((
+                            "broadcast".to_string(),
+                            IpcMessage::StatsData { stats: stats_json },
+                        ))
+                        .await;
 
                     // Send updated history
                     if let Ok(entries) = state.db.get_connection_history(100).await {
-                        let _ = resp_tx.send((
-                            "broadcast".to_string(),
-                            IpcMessage::HistoryData { entries },
-                        )).await;
+                        let _ = resp_tx
+                            .send(("broadcast".to_string(), IpcMessage::HistoryData { entries }))
+                            .await;
                     }
                 }
             }
@@ -483,7 +520,7 @@ async fn handle_ebpf_event(
     // Perform blocking /proc reads in a separate thread
     let pid = event.pid;
     let event_comm = event.comm_string(); // Clone string before moving
-    
+
     let proc_info = tokio::task::spawn_blocking(move || {
         let executable = match std::fs::read_link(format!("/proc/{}/exe", pid)) {
             Ok(path) => path.to_string_lossy().to_string(),
@@ -494,9 +531,10 @@ async fn handle_ebpf_event(
             Ok(cmd) => cmd.replace('\0', " ").trim().to_string(),
             Err(_) => executable.clone(),
         };
-        
+
         (executable, cmdline)
-    }).await;
+    })
+    .await;
 
     let (executable, cmdline) = match proc_info {
         Ok(info) => info,
@@ -529,9 +567,34 @@ async fn handle_ebpf_event(
         process_start_time: 0,
     };
 
+    // Deduplicate TCP events: both `kprobe/tcp_connect` and
+    // `kprobe/tcp_v4_connect` (or tcp_v6_connect) can fire for the same
+    // outbound TCP connection. Keep only the first one seen.
+    use crate::ebpf::{IPPROTO_TCP};
+    if event.protocol == IPPROTO_TCP {
+        let key = ConnKey {
+            pid: conn_info.pid,
+            dest_ip: conn_info.dest_ip,
+            dest_port: conn_info.dest_port,
+        };
+        let mut cache = state.recent_tcp_conns.write().await;
+        if cache.put(key, ()).is_some() {
+            // Duplicate — already handled this exact connection tuple
+            trace!(
+                "Deduplicated TCP event: {} ({}) -> {}:{}",
+                executable, event.pid, dest_ip, event.dport
+            );
+            return;
+        }
+    }
+
     trace!(
         "Connection: {} ({}) -> {}:{} [{}]",
-        executable, event.pid, dest_ip, event.dport, event.protocol_string()
+        executable,
+        event.pid,
+        dest_ip,
+        event.dport,
+        event.protocol_string()
     );
 
     // Check rules using READ lock first for better concurrency
@@ -553,73 +616,88 @@ async fn handle_ebpf_event(
         drop(stats);
 
         // Log to database
-        let _ = state.db.save_connection_history(
-            Utc::now(),
-            conn_info.pid,
-            conn_info.uid,
-            conn_info.gid,
-            &conn_info.executable,
-            &conn_info.cmdline,
-            &conn_info.dest_ip.to_string(),
-            conn_info.dest_port,
-            conn_info.dest_host.as_deref(),
-            &conn_info.protocol,
-            &action,
-            None,
-        ).await;
+        let _ = state
+            .db
+            .save_connection_history(
+                Utc::now(),
+                conn_info.pid,
+                conn_info.uid,
+                conn_info.gid,
+                &conn_info.executable,
+                &conn_info.cmdline,
+                &conn_info.dest_ip.to_string(),
+                conn_info.dest_port,
+                conn_info.dest_host.as_deref(),
+                &conn_info.protocol,
+                &action,
+                None,
+            )
+            .await;
 
         // Send connection event to GUI
-        let _ = ipc_resp_tx.send((
-            "broadcast".to_string(),
-            IpcMessage::ConnectionEvent {
-                timestamp: Utc::now().to_rfc3339(),
-                pid: conn_info.pid,
-                executable: conn_info.executable.clone(),
-                dest_ip: conn_info.dest_ip.to_string(),
-                dest_port: conn_info.dest_port,
-                dest_host: conn_info.dest_host.clone(),
-                protocol: conn_info.protocol.clone(),
-                action: format!("{:?}", action).to_lowercase(),
-            },
-        )).await;
+        let _ = ipc_resp_tx
+            .send((
+                "broadcast".to_string(),
+                IpcMessage::ConnectionEvent {
+                    timestamp: Utc::now().to_rfc3339(),
+                    pid: conn_info.pid,
+                    uid: conn_info.uid,
+                    gid: conn_info.gid,
+                    executable: conn_info.executable.clone(),
+                    cmdline: conn_info.cmdline.clone(),
+                    dest_ip: conn_info.dest_ip.to_string(),
+                    dest_port: conn_info.dest_port,
+                    dest_host: conn_info.dest_host.clone(),
+                    protocol: conn_info.protocol.clone(),
+                    action: format!("{:?}", action).to_lowercase(),
+                    rule_id: None,
+                },
+            ))
+            .await;
 
         // Send updated stats
-        // To reduce IPC traffic, maybe don't send stats on every single packet?
-        // But for now, let's keep it to maintain behavior.
-        // Optimization: clone stats inside the lock to minimize hold time
+        let active_rules = state.rule_engine.read().await.get_rules().len();
         let stats_lock = state.stats.read().await;
         let stats_json = serde_json::json!({
             "total_connections": stats_lock.total_connections,
             "allowed": stats_lock.allowed,
             "denied": stats_lock.denied,
-            "active_rules": state.rule_engine.read().await.get_rules().len(),
+            "active_rules": active_rules,
         });
         drop(stats_lock);
 
-        let _ = ipc_resp_tx.send((
-            "broadcast".to_string(),
-            IpcMessage::StatsData { stats: stats_json },
-        )).await;
+        let _ = ipc_resp_tx
+            .send((
+                "broadcast".to_string(),
+                IpcMessage::StatsData { stats: stats_json },
+            ))
+            .await;
     } else {
         // No rule matched, send prompt to GUI
         let prompt_id = uuid::Uuid::new_v4().to_string();
 
-        state.pending_prompts.write().await.insert(prompt_id.clone(), conn_info.clone());
+        state
+            .pending_prompts
+            .write()
+            .await
+            .insert(prompt_id.clone(), conn_info.clone());
 
-        let _ = ipc_resp_tx.send((
-            "broadcast".to_string(),
-            IpcMessage::ConnectionPrompt {
-                prompt_id,
-                pid: conn_info.pid,
-                uid: conn_info.uid,
-                executable: conn_info.executable,
-                cmdline: conn_info.cmdline,
-                dest_ip: conn_info.dest_ip.to_string(),
-                dest_port: conn_info.dest_port,
-                dest_host: conn_info.dest_host,
-                protocol: conn_info.protocol,
-            },
-        )).await;
+        let _ = ipc_resp_tx
+            .send((
+                "broadcast".to_string(),
+                IpcMessage::ConnectionPrompt {
+                    prompt_id,
+                    pid: conn_info.pid,
+                    uid: conn_info.uid,
+                    executable: conn_info.executable,
+                    cmdline: conn_info.cmdline,
+                    dest_ip: conn_info.dest_ip.to_string(),
+                    dest_port: conn_info.dest_port,
+                    dest_host: conn_info.dest_host,
+                    protocol: conn_info.protocol,
+                },
+            ))
+            .await;
 
         debug!("Connection prompt sent to GUI");
     }
@@ -633,7 +711,7 @@ async fn handle_connection_event(
     conn_info: ConnectionInfo,
 ) {
     // Check rules
-    let mut engine = state.rule_engine.write().await;
+    let engine = state.rule_engine.read().await;
     if let Some(action) = engine.evaluate(&conn_info) {
         drop(engine);
         info!("Connection matched rule: {:?}", action);
@@ -649,69 +727,88 @@ async fn handle_connection_event(
         drop(stats);
 
         // Log to database
-        let _ = state.db.save_connection_history(
-            Utc::now(),
-            conn_info.pid,
-            conn_info.uid,
-            conn_info.gid,
-            &conn_info.executable,
-            &conn_info.cmdline,
-            &conn_info.dest_ip.to_string(),
-            conn_info.dest_port,
-            conn_info.dest_host.as_deref(),
-            &conn_info.protocol,
-            &action,
-            None,
-        ).await;
+        let _ = state
+            .db
+            .save_connection_history(
+                Utc::now(),
+                conn_info.pid,
+                conn_info.uid,
+                conn_info.gid,
+                &conn_info.executable,
+                &conn_info.cmdline,
+                &conn_info.dest_ip.to_string(),
+                conn_info.dest_port,
+                conn_info.dest_host.as_deref(),
+                &conn_info.protocol,
+                &action,
+                None,
+            )
+            .await;
 
         // Send connection event to GUI
-        let _ = ipc_resp_tx.send((
-            "broadcast".to_string(),
-            IpcMessage::ConnectionEvent {
-                timestamp: Utc::now().to_rfc3339(),
-                pid: conn_info.pid,
-                executable: conn_info.executable.clone(),
-                dest_ip: conn_info.dest_ip.to_string(),
-                dest_port: conn_info.dest_port,
-                dest_host: conn_info.dest_host.clone(),
-                protocol: conn_info.protocol.clone(),
-                action: format!("{:?}", action).to_lowercase(),
-            },
-        )).await;
+        let _ = ipc_resp_tx
+            .send((
+                "broadcast".to_string(),
+                IpcMessage::ConnectionEvent {
+                    timestamp: Utc::now().to_rfc3339(),
+                    pid: conn_info.pid,
+                    uid: conn_info.uid,
+                    gid: conn_info.gid,
+                    executable: conn_info.executable.clone(),
+                    cmdline: conn_info.cmdline.clone(),
+                    dest_ip: conn_info.dest_ip.to_string(),
+                    dest_port: conn_info.dest_port,
+                    dest_host: conn_info.dest_host.clone(),
+                    protocol: conn_info.protocol.clone(),
+                    action: format!("{:?}", action).to_lowercase(),
+                    rule_id: None,
+                },
+            ))
+            .await;
 
         // Send updated stats
+        let active_rules = state.rule_engine.read().await.get_rules().len();
         let stats_lock = state.stats.read().await;
         let stats_json = serde_json::json!({
             "total_connections": stats_lock.total_connections,
             "allowed": stats_lock.allowed,
             "denied": stats_lock.denied,
-            "active_rules": state.rule_engine.read().await.get_rules().len(),
+            "active_rules": active_rules,
         });
+        drop(stats_lock);
 
-        let _ = ipc_resp_tx.send((
-            "broadcast".to_string(),
-            IpcMessage::StatsData { stats: stats_json },
-        )).await;
+        let _ = ipc_resp_tx
+            .send((
+                "broadcast".to_string(),
+                IpcMessage::StatsData { stats: stats_json },
+            ))
+            .await;
     } else {
         // No rule matched, send prompt to GUI
         let prompt_id = uuid::Uuid::new_v4().to_string();
 
-        state.pending_prompts.write().await.insert(prompt_id.clone(), conn_info.clone());
+        state
+            .pending_prompts
+            .write()
+            .await
+            .insert(prompt_id.clone(), conn_info.clone());
 
-        let _ = ipc_resp_tx.send((
-            "broadcast".to_string(),
-            IpcMessage::ConnectionPrompt {
-                prompt_id,
-                pid: conn_info.pid,
-                uid: conn_info.uid,
-                executable: conn_info.executable,
-                cmdline: conn_info.cmdline,
-                dest_ip: conn_info.dest_ip.to_string(),
-                dest_port: conn_info.dest_port,
-                dest_host: conn_info.dest_host,
-                protocol: conn_info.protocol,
-            },
-        )).await;
+        let _ = ipc_resp_tx
+            .send((
+                "broadcast".to_string(),
+                IpcMessage::ConnectionPrompt {
+                    prompt_id,
+                    pid: conn_info.pid,
+                    uid: conn_info.uid,
+                    executable: conn_info.executable,
+                    cmdline: conn_info.cmdline,
+                    dest_ip: conn_info.dest_ip.to_string(),
+                    dest_port: conn_info.dest_port,
+                    dest_host: conn_info.dest_host,
+                    protocol: conn_info.protocol,
+                },
+            ))
+            .await;
 
         info!("Connection prompt sent to GUI");
     }
