@@ -153,6 +153,14 @@ ipcMain.handle('respond-to-prompt', async (_event, promptId, action, remember, d
   });
 });
 
+ipcMain.handle('get-config', async () => {
+  sendToDaemon({ type: 'GetConfig' });
+});
+
+ipcMain.handle('set-default-action', async (_event, action) => {
+  sendToDaemon({ type: 'SetDefaultAction', action });
+});
+
 app.whenReady().then(() => {
   createWindow();
   connectToDaemon();

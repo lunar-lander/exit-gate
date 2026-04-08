@@ -24,4 +24,8 @@ contextBridge.exposeInMainWorld('electron', {
   // Prompt responses
   respondToPrompt: (promptId: string, action: string, remember: boolean, duration: string) =>
     ipcRenderer.invoke('respond-to-prompt', promptId, action, remember, duration),
+
+  // Config
+  getConfig: () => ipcRenderer.invoke('get-config'),
+  setDefaultAction: (action: string) => ipcRenderer.invoke('set-default-action', action),
 });

@@ -73,6 +73,12 @@ export interface Stats {
   active_rules: number;
 }
 
+export type DefaultAction = 'allow' | 'deny' | 'prompt';
+
+export interface Config {
+  default_action: DefaultAction;
+}
+
 export interface DaemonMessage {
   type: string;
   [key: string]: any;
@@ -96,6 +102,8 @@ declare global {
         remember: boolean,
         duration: string
       ) => Promise<void>;
+      getConfig: () => Promise<void>;
+      setDefaultAction: (action: DefaultAction) => Promise<void>;
     };
   }
 }
