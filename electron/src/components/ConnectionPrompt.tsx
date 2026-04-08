@@ -190,6 +190,18 @@ const ConnectionPrompt: React.FC<ConnectionPromptProps> = ({ prompt, onResponse 
             </DialogContent>
 
             <DialogActions sx={{ p: 2, gap: 1 }}>
+                {/* Allow is the secondary action — outlined so it's less prominent */}
+                <Button
+                    variant="outlined"
+                    color="success"
+                    size="large"
+                    startIcon={<CheckCircle />}
+                    onClick={handleAllow}
+                    sx={{ minWidth: 120 }}
+                >
+                    Allow
+                </Button>
+                {/* Deny is the primary deliberate action in allow-by-default mode */}
                 <Button
                     variant="contained"
                     color="error"
@@ -197,19 +209,9 @@ const ConnectionPrompt: React.FC<ConnectionPromptProps> = ({ prompt, onResponse 
                     startIcon={<Block />}
                     onClick={handleDeny}
                     sx={{ minWidth: 120 }}
-                >
-                    Deny
-                </Button>
-                <Button
-                    variant="contained"
-                    color="success"
-                    size="large"
-                    startIcon={<CheckCircle />}
-                    onClick={handleAllow}
-                    sx={{ minWidth: 120 }}
                     autoFocus
                 >
-                    Allow
+                    Deny
                 </Button>
             </DialogActions>
         </Dialog>
