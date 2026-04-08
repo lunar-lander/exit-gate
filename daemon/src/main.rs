@@ -60,6 +60,11 @@ struct DaemonState {
     /// Recently seen (pid, dest_ip, dest_port) tuples; prevents duplicate events
     /// emitted when both tcp_connect and tcp_v4/v6_connect kprobes fire together.
     recent_tcp_conns: RwLock<lru::LruCache<ConnKey, ()>>,
+    /// What to do when no rule matches a connection.
+    /// "allow"  — pass through silently (blocklist / allow-by-default mode)
+    /// "deny"   — block silently        (allowlist / deny-by-default mode)
+    /// "prompt" — ask the user
+    default_action: RwLock<String>,
 }
 
 #[tokio::main]
@@ -120,6 +125,7 @@ async fn main() -> Result<()> {
         recent_tcp_conns: RwLock::new(lru::LruCache::new(
             std::num::NonZeroUsize::new(4096).unwrap(),
         )),
+        default_action: RwLock::new(config.notifications.default_action.clone()),
     });
 
     // Create IPC channels
@@ -395,6 +401,30 @@ async fn handle_ipc_messages(
                 let _ = resp_tx
                     .send(("broadcast".to_string(), IpcMessage::StatsData { stats }))
                     .await;
+            }
+
+            IpcMessage::GetConfig => {
+                let default_action = state.default_action.read().await.clone();
+                let _ = resp_tx
+                    .send(("broadcast".to_string(), IpcMessage::ConfigData { default_action }))
+                    .await;
+            }
+
+            IpcMessage::SetDefaultAction { action } => {
+                let valid = matches!(action.as_str(), "allow" | "deny" | "prompt");
+                if valid {
+                    *state.default_action.write().await = action.clone();
+                    info!("Default action changed to: {}", action);
+                    let _ = resp_tx
+                        .send(("broadcast".to_string(), IpcMessage::ConfigData { default_action: action }))
+                        .await;
+                } else {
+                    let _ = resp_tx
+                        .send(("broadcast".to_string(), IpcMessage::Error {
+                            message: format!("Invalid default action '{}'; must be allow, deny, or prompt", action),
+                        }))
+                        .await;
+                }
             }
 
             IpcMessage::RespondToPrompt {
@@ -673,33 +703,126 @@ async fn handle_ebpf_event(
             ))
             .await;
     } else {
-        // No rule matched, send prompt to GUI
-        let prompt_id = uuid::Uuid::new_v4().to_string();
+        // No rule matched — apply the configured default action.
+        let default = state.default_action.read().await.clone();
 
-        state
-            .pending_prompts
-            .write()
-            .await
-            .insert(prompt_id.clone(), conn_info.clone());
+        match default.as_str() {
+            "allow" => {
+                // Silently allow and log to history.
+                let mut stats = state.stats.write().await;
+                stats.total_connections += 1;
+                stats.allowed += 1;
+                drop(stats);
 
-        let _ = ipc_resp_tx
-            .send((
-                "broadcast".to_string(),
-                IpcMessage::ConnectionPrompt {
-                    prompt_id,
-                    pid: conn_info.pid,
-                    uid: conn_info.uid,
-                    executable: conn_info.executable,
-                    cmdline: conn_info.cmdline,
-                    dest_ip: conn_info.dest_ip.to_string(),
-                    dest_port: conn_info.dest_port,
-                    dest_host: conn_info.dest_host,
-                    protocol: conn_info.protocol,
-                },
-            ))
-            .await;
+                let _ = state.db.save_connection_history(
+                    Utc::now(),
+                    conn_info.pid,
+                    conn_info.uid,
+                    conn_info.gid,
+                    &conn_info.executable,
+                    &conn_info.cmdline,
+                    &conn_info.dest_ip.to_string(),
+                    conn_info.dest_port,
+                    conn_info.dest_host.as_deref(),
+                    &conn_info.protocol,
+                    &Action::Allow,
+                    None,
+                ).await;
 
-        debug!("Connection prompt sent to GUI");
+                let _ = ipc_resp_tx.send((
+                    "broadcast".to_string(),
+                    IpcMessage::ConnectionEvent {
+                        timestamp: Utc::now().to_rfc3339(),
+                        pid: conn_info.pid,
+                        uid: conn_info.uid,
+                        gid: conn_info.gid,
+                        executable: conn_info.executable,
+                        cmdline: conn_info.cmdline,
+                        dest_ip: conn_info.dest_ip.to_string(),
+                        dest_port: conn_info.dest_port,
+                        dest_host: conn_info.dest_host,
+                        protocol: conn_info.protocol,
+                        action: "allow".to_string(),
+                        rule_id: None,
+                    },
+                )).await;
+
+                trace!("Default action: allowed (no matching rule)");
+            }
+
+            "deny" => {
+                // Silently deny and log to history.
+                let mut stats = state.stats.write().await;
+                stats.total_connections += 1;
+                stats.denied += 1;
+                drop(stats);
+
+                let _ = state.db.save_connection_history(
+                    Utc::now(),
+                    conn_info.pid,
+                    conn_info.uid,
+                    conn_info.gid,
+                    &conn_info.executable,
+                    &conn_info.cmdline,
+                    &conn_info.dest_ip.to_string(),
+                    conn_info.dest_port,
+                    conn_info.dest_host.as_deref(),
+                    &conn_info.protocol,
+                    &Action::Deny,
+                    None,
+                ).await;
+
+                let _ = ipc_resp_tx.send((
+                    "broadcast".to_string(),
+                    IpcMessage::ConnectionEvent {
+                        timestamp: Utc::now().to_rfc3339(),
+                        pid: conn_info.pid,
+                        uid: conn_info.uid,
+                        gid: conn_info.gid,
+                        executable: conn_info.executable,
+                        cmdline: conn_info.cmdline,
+                        dest_ip: conn_info.dest_ip.to_string(),
+                        dest_port: conn_info.dest_port,
+                        dest_host: conn_info.dest_host,
+                        protocol: conn_info.protocol,
+                        action: "deny".to_string(),
+                        rule_id: None,
+                    },
+                )).await;
+
+                debug!("Default action: denied (no matching rule)");
+            }
+
+            _ => {
+                // "prompt" (or any unrecognised value) — ask the user.
+                let prompt_id = uuid::Uuid::new_v4().to_string();
+
+                state
+                    .pending_prompts
+                    .write()
+                    .await
+                    .insert(prompt_id.clone(), conn_info.clone());
+
+                let _ = ipc_resp_tx
+                    .send((
+                        "broadcast".to_string(),
+                        IpcMessage::ConnectionPrompt {
+                            prompt_id,
+                            pid: conn_info.pid,
+                            uid: conn_info.uid,
+                            executable: conn_info.executable,
+                            cmdline: conn_info.cmdline,
+                            dest_ip: conn_info.dest_ip.to_string(),
+                            dest_port: conn_info.dest_port,
+                            dest_host: conn_info.dest_host,
+                            protocol: conn_info.protocol,
+                        },
+                    ))
+                    .await;
+
+                debug!("Connection prompt sent to GUI");
+            }
+        }
     }
 }
 
