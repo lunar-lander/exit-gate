@@ -11,11 +11,9 @@ import {
   ListItemText,
   useTheme,
   Chip,
-  Avatar,
   FormControl,
   Select,
   MenuItem,
-  InputLabel,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -38,8 +36,6 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  AreaChart,
-  Area,
 } from 'recharts';
 import { Stats, HistoryEntry } from '../types';
 import { format } from 'date-fns';
@@ -239,7 +235,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
                 <BarChart data={appChartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
                   <XAxis dataKey="name" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} />
-                  <YAxis stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} scale="log" domain={[1, 'auto']} />
+                  <YAxis stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} domain={[0, 'auto']} allowDecimals={false} />
                   <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
                   <Bar dataKey="count" fill={COLORS.apps} radius={[4, 4, 0, 0]} barSize={40} />
                 </BarChart>
@@ -314,7 +310,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={domainChartData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
-                  <XAxis type="number" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} scale="log" domain={[1, 'auto']} />
+                  <XAxis type="number" stroke={COLORS.text} tick={{ fill: COLORS.text }} tickLine={false} axisLine={false} domain={[0, 'auto']} allowDecimals={false} />
                   <YAxis
                     dataKey="name"
                     type="category"
