@@ -4,7 +4,10 @@ contextBridge.exposeInMainWorld('electron', {
   // Daemon communication
   sendToDaemon: (message: any) => ipcRenderer.invoke('send-to-daemon', message),
   onDaemonMessage: (callback: (message: any) => void) => {
-    ipcRenderer.on('daemon-message', (_event, message) => callback(message));
+    const listener = (_event: Electron.IpcRendererEvent, message: any) => callback(message);
+    ipcRenderer.on('daemon-message', listener);
+    // Return a cleanup function so callers can remove the listener
+    return () => ipcRenderer.removeListener('daemon-message', listener);
   },
 
   // Rule management
