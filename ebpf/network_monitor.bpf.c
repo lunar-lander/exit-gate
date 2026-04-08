@@ -53,23 +53,44 @@ struct in6_addr {
     } in6_u;
 };
 
-/* Minimal sock structure for eBPF */
+/*
+ * Minimal sock_common mirror matching the actual kernel layout.
+ *
+ * Offsets verified against running kernel via pahole:
+ *   0  : skc_daddr / skc_rcv_saddr
+ *   8  : skc_hash            <-- previously missing, caused all TCP reads to be wrong
+ *   12 : skc_dport / skc_num
+ *   16 : skc_family
+ *   18 : skc_state + reuse flags (2 bytes)
+ *   20 : skc_bound_dev_if    (4 bytes)
+ *   24 : skc_bind_node       (16 bytes, two pointers)
+ *   40 : skc_prot*           (8 bytes)
+ *   48 : skc_net             (8 bytes)
+ *   56 : skc_v6_daddr        (16 bytes)
+ *   72 : skc_v6_rcv_saddr    (16 bytes)
+ */
 struct sock_common {
     union {
         struct {
             __be32 skc_daddr;
             __be32 skc_rcv_saddr;
         };
-    };
+    };                              /* offset  0, size 8 */
+    __u32 skc_hash;                 /* offset  8, size 4 -- was missing! */
     union {
         struct {
             __be16 skc_dport;
-            __u16 skc_num;
+            __u16  skc_num;
         };
-    };
-    short unsigned int skc_family;
-    struct in6_addr skc_v6_daddr;
-    struct in6_addr skc_v6_rcv_saddr;
+    };                              /* offset 12, size 4 */
+    short unsigned int skc_family;  /* offset 16, size 2 */
+    __u8  __pad0[2];                /* offset 18: skc_state + reuse flags */
+    __u32 skc_bound_dev_if;         /* offset 20, size 4 */
+    __u8  __pad1[16];               /* offset 24: skc_bind_node (2 x pointer) */
+    __u8  __pad2[8];                /* offset 40: skc_prot* */
+    __u8  __pad3[8];                /* offset 48: skc_net */
+    struct in6_addr skc_v6_daddr;   /* offset 56, size 16 */
+    struct in6_addr skc_v6_rcv_saddr; /* offset 72, size 16 */
 };
 
 struct sock {
@@ -167,7 +188,13 @@ struct {
     __type(value, __u64);
 } process_cache SEC(".maps");
 
-/* kprobe for tcp_connect */
+/*
+ * kprobe/tcp_connect
+ *
+ * Fires when the kernel calls tcp_connect(sk) internally — at this point the
+ * socket's destination (skc_daddr / skc_v6_daddr) has already been populated
+ * by tcp_v4_connect / tcp_v6_connect, so we can read it directly from sk.
+ */
 SEC("kprobe/tcp_connect")
 int kprobe_tcp_connect(struct pt_regs *ctx)
 {
@@ -193,7 +220,7 @@ int kprobe_tcp_connect(struct pt_regs *ctx)
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
-    /* Read socket information */
+    /* Read socket family — now at the correct offset (16) in the fixed struct */
     __u16 family;
     bpf_probe_read_kernel(&family, sizeof(family), &sk->__sk_common.skc_family);
     event->family = family;
@@ -223,6 +250,108 @@ int kprobe_tcp_connect(struct pt_regs *ctx)
     /* Submit event to user space */
     bpf_ringbuf_submit(event, 0);
 
+    return 0;
+}
+
+/*
+ * kprobe/tcp_v4_connect  (fallback / defence-in-depth for IPv4)
+ *
+ * Fires at the syscall boundary: tcp_v4_connect(sk, uaddr, addr_len).
+ * At entry, the destination address is in `uaddr` (sockaddr_in*), NOT yet
+ * written into sk. We read directly from the userspace sockaddr so we are
+ * completely independent of the sock_common layout.
+ */
+SEC("kprobe/tcp_v4_connect")
+int kprobe_tcp_v4_connect(struct pt_regs *ctx)
+{
+    struct sock *sk         = (struct sock *)PT_REGS_PARM1(ctx);
+    struct sockaddr_in *uaddr = (struct sockaddr_in *)PT_REGS_PARM2(ctx);
+    struct connection_event *event;
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 pid = pid_tgid >> 32;
+    __u64 uid_gid = bpf_get_current_uid_gid();
+
+    if (!uaddr)
+        return 0;
+
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->pid        = pid;
+    event->tid        = (__u32)pid_tgid;
+    event->uid        = (__u32)uid_gid;
+    event->gid        = uid_gid >> 32;
+    event->event_type = EVENT_TCP_CONNECT;
+    event->protocol   = IPPROTO_TCP;
+    event->family     = AF_INET;
+    event->timestamp  = bpf_ktime_get_ns();
+
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+
+    /* Destination from uaddr (already in network byte order) */
+    __u32 daddr; __u16 dport;
+    bpf_probe_read_user(&daddr, sizeof(daddr), &uaddr->sin_addr.s_addr);
+    bpf_probe_read_user(&dport, sizeof(dport), &uaddr->sin_port);
+    event->daddr_v4 = daddr;
+    event->dport    = bpf_ntohs(dport);
+
+    /* Source address from sk (populated during bind or auto-assigned) */
+    bpf_probe_read_kernel(&event->saddr_v4, sizeof(event->saddr_v4),
+                         &sk->__sk_common.skc_rcv_saddr);
+    bpf_probe_read_kernel(&event->sport, sizeof(event->sport),
+                         &sk->__sk_common.skc_num);
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+/*
+ * kprobe/tcp_v6_connect  (fallback / defence-in-depth for IPv6)
+ *
+ * Fires at: tcp_v6_connect(sk, uaddr, addr_len).
+ * Reads destination directly from uaddr (sockaddr_in6*).
+ */
+SEC("kprobe/tcp_v6_connect")
+int kprobe_tcp_v6_connect(struct pt_regs *ctx)
+{
+    struct sock *sk           = (struct sock *)PT_REGS_PARM1(ctx);
+    struct sockaddr_in6 *uaddr = (struct sockaddr_in6 *)PT_REGS_PARM2(ctx);
+    struct connection_event *event;
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 pid = pid_tgid >> 32;
+    __u64 uid_gid = bpf_get_current_uid_gid();
+
+    if (!uaddr)
+        return 0;
+
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->pid        = pid;
+    event->tid        = (__u32)pid_tgid;
+    event->uid        = (__u32)uid_gid;
+    event->gid        = uid_gid >> 32;
+    event->event_type = EVENT_TCP_CONNECT;
+    event->protocol   = IPPROTO_TCP;
+    event->family     = AF_INET6;
+    event->timestamp  = bpf_ktime_get_ns();
+
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+
+    __u16 dport;
+    bpf_probe_read_user(&event->daddr_v6, sizeof(event->daddr_v6),
+                       &uaddr->sin6_addr);
+    bpf_probe_read_user(&dport, sizeof(dport), &uaddr->sin6_port);
+    event->dport = bpf_ntohs(dport);
+
+    bpf_probe_read_kernel(&event->saddr_v6, sizeof(event->saddr_v6),
+                         &sk->__sk_common.skc_v6_rcv_saddr);
+    bpf_probe_read_kernel(&event->sport, sizeof(event->sport),
+                         &sk->__sk_common.skc_num);
+
+    bpf_ringbuf_submit(event, 0);
     return 0;
 }
 
