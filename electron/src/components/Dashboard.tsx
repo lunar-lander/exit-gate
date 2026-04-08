@@ -14,6 +14,9 @@ import {
   FormControl,
   Select,
   MenuItem,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip as MuiTooltip,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -23,6 +26,7 @@ import {
   TrendingUp,
   Dns,
   Apps,
+  Help,
 } from '@mui/icons-material';
 import {
   PieChart,
@@ -37,15 +41,17 @@ import {
   YAxis,
   CartesianGrid,
 } from 'recharts';
-import { Stats, HistoryEntry } from '../types';
+import { DefaultAction, HistoryEntry, Stats } from '../types';
 import { format } from 'date-fns';
 
 interface DashboardProps {
   stats: Stats;
   recentConnections: HistoryEntry[];
+  defaultAction: DefaultAction;
+  onSetDefaultAction: (action: DefaultAction) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
+const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections, defaultAction, onSetDefaultAction }) => {
   const theme = useTheme();
   const [timeRange, setTimeRange] = React.useState('1h');
 
@@ -162,8 +168,67 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, recentConnections }) => {
 
   return (
     <Grid container spacing={3}>
-      {/* Header with Time Selector */}
-      <Grid item xs={12} display="flex" justifyContent="flex-end" alignItems="center">
+      {/* Header: Default-mode toggle + Time Selector */}
+      <Grid item xs={12} display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
+
+        {/* Default action toggle */}
+        <Box display="flex" alignItems="center" gap={1}>
+          <MuiTooltip title={
+            defaultAction === 'allow'
+              ? 'Allow-by-default: all connections pass unless a Deny rule matches'
+              : defaultAction === 'deny'
+              ? 'Deny-by-default: all connections are blocked unless an Allow rule matches'
+              : 'Prompt mode: ask for every connection that has no matching rule'
+          }>
+            <Box display="flex" alignItems="center" gap={0.5} sx={{ cursor: 'default' }}>
+              <Help sx={{ fontSize: 16, color: 'text.secondary' }} />
+              <Typography variant="body2" color="text.secondary" fontWeight={600}>
+                Default:
+              </Typography>
+            </Box>
+          </MuiTooltip>
+          <ToggleButtonGroup
+            value={defaultAction}
+            exclusive
+            size="small"
+            onChange={(_e, val) => { if (val) onSetDefaultAction(val as DefaultAction); }}
+            sx={{
+              '& .MuiToggleButton-root': {
+                textTransform: 'none',
+                fontWeight: 600,
+                fontSize: '0.8rem',
+                px: 1.5,
+                py: 0.5,
+                borderColor: 'rgba(255,255,255,0.1)',
+                color: 'text.secondary',
+              },
+              '& .MuiToggleButton-root.Mui-selected[value="allow"]': {
+                color: 'success.main',
+                bgcolor: 'rgba(52,211,153,0.12)',
+              },
+              '& .MuiToggleButton-root.Mui-selected[value="deny"]': {
+                color: 'error.main',
+                bgcolor: 'rgba(248,113,113,0.12)',
+              },
+              '& .MuiToggleButton-root.Mui-selected[value="prompt"]': {
+                color: 'warning.main',
+                bgcolor: 'rgba(251,191,36,0.12)',
+              },
+            }}
+          >
+            <ToggleButton value="allow">
+              <CheckCircle sx={{ fontSize: 14, mr: 0.5 }} /> Allow All
+            </ToggleButton>
+            <ToggleButton value="prompt">
+              <Help sx={{ fontSize: 14, mr: 0.5 }} /> Prompt
+            </ToggleButton>
+            <ToggleButton value="deny">
+              <Cancel sx={{ fontSize: 14, mr: 0.5 }} /> Deny All
+            </ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+
+        {/* Time range selector */}
         <FormControl size="small" sx={{ minWidth: 150 }}>
           <Select
             value={timeRange}
