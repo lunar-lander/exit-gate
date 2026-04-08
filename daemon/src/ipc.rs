@@ -28,6 +28,11 @@ pub enum IpcMessage {
         timestamp: String,
     },
     GetStats,
+    GetConfig,
+    SetDefaultAction {
+        /// "allow" | "deny" | "prompt"
+        action: String,
+    },
     RespondToPrompt {
         prompt_id: String,
         action: String,
@@ -36,6 +41,9 @@ pub enum IpcMessage {
     },
 
     // Daemon -> Client
+    ConfigData {
+        default_action: String,
+    },
     ConnectionPrompt {
         prompt_id: String,
         pid: u32,
