@@ -57,7 +57,10 @@ fn default_timeout() -> u64 {
 }
 
 fn default_action() -> String {
-    "deny".to_string()
+    // "allow"  — pass all unmatched connections through (allow-by-default / blocklist mode)
+    // "deny"   — block all unmatched connections     (deny-by-default  / allowlist mode)
+    // "prompt" — ask the user for every unmatched connection
+    "allow".to_string()
 }
 
 fn default_monitor_outbound() -> bool {
