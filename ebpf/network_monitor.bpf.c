@@ -3,9 +3,8 @@
 #include <linux/ptrace.h>
 
 /* BPF helper function declarations */
-static void *(*bpf_map_lookup_elem)(void *map, const void *key) = (void *) 1;
-static long (*bpf_map_update_elem)(void *map, const void *key, const void *value, __u64 flags) = (void *) 2;
 static long (*bpf_probe_read_kernel)(void *dst, __u32 size, const void *unsafe_ptr) = (void *) 113;
+static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr) = (void *) 112;
 static __u64 (*bpf_ktime_get_ns)(void) = (void *) 5;
 static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) = (void *) 16;
 static __u64 (*bpf_get_current_pid_tgid)(void) = (void *) 14;
@@ -117,17 +116,11 @@ struct sockaddr_in6 {
 #define AF_INET6 10
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
-#define MAX_ENTRIES 10240
 
 /* Event types */
 #define EVENT_TCP_CONNECT 1
 #define EVENT_UDP_SEND 2
 #define EVENT_TCP_ACCEPT 3
-
-/* Connection verdict */
-#define VERDICT_PENDING 0
-#define VERDICT_ALLOW 1
-#define VERDICT_DENY 2
 
 /* Connection event structure */
 struct connection_event {
@@ -152,21 +145,7 @@ struct connection_event {
     __u64 timestamp;
 };
 
-/* Connection key for tracking */
-struct conn_key {
-    __u32 pid;
-    __u32 saddr;
-    __u32 daddr;
-    __u16 sport;
-    __u16 dport;
-    __u8 protocol;
-};
 
-/* Connection verdict entry */
-struct conn_verdict {
-    __u8 verdict;
-    __u64 timestamp;
-};
 
 /* BPF Maps */
 struct {
@@ -174,19 +153,7 @@ struct {
     __uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, MAX_ENTRIES);
-    __type(key, struct conn_key);
-    __type(value, struct conn_verdict);
-} verdicts SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1024);
-    __type(key, __u32);
-    __type(value, __u64);
-} process_cache SEC(".maps");
 
 /*
  * kprobe/tcp_connect
