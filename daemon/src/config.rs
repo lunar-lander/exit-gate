@@ -1,7 +1,7 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use anyhow::{Context, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -100,10 +100,9 @@ impl Default for Config {
 
 impl Config {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let contents = fs::read_to_string(path)
-            .context("Failed to read configuration file")?;
-        let config: Config = toml::from_str(&contents)
-            .context("Failed to parse configuration file")?;
+        let contents = fs::read_to_string(path).context("Failed to read configuration file")?;
+        let config: Config =
+            toml::from_str(&contents).context("Failed to parse configuration file")?;
         Ok(config)
     }
 
@@ -125,11 +124,10 @@ impl Config {
         Ok(Config::default())
     }
 
+    #[allow(dead_code)]
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let contents = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
-        fs::write(path, contents)
-            .context("Failed to write configuration file")?;
+        let contents = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
+        fs::write(path, contents).context("Failed to write configuration file")?;
         Ok(())
     }
 }

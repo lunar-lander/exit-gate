@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
-use libbpf_rs::{ObjectBuilder, Object, RingBufferBuilder, Link};
+use libbpf_rs::{Link, ObjectBuilder, RingBufferBuilder};
 use std::path::Path;
-use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, warn, error, debug, trace};
+use tracing::{debug, info, trace, warn};
 
 // Event types from eBPF program
 const EVENT_TCP_CONNECT: u8 = 1;
@@ -12,11 +11,10 @@ const EVENT_TCP_ACCEPT: u8 = 3;
 
 // Address families
 const AF_INET: u16 = 2;
-const AF_INET6: u16 = 10;
 
 // Protocols
-const IPPROTO_TCP: u8 = 6;
-const IPPROTO_UDP: u8 = 17;
+pub const IPPROTO_TCP: u8 = 6;
+pub const IPPROTO_UDP: u8 = 17;
 
 /// Connection event structure matching the eBPF program's structure
 #[repr(C)]
@@ -31,7 +29,7 @@ pub struct ConnectionEvent {
     pub family: u16,
     pub sport: u16,
     pub dport: u16,
-    pub saddr: [u8; 16],  // Can hold both IPv4 (first 4 bytes) and IPv6
+    pub saddr: [u8; 16], // Can hold both IPv4 (first 4 bytes) and IPv6
     pub daddr: [u8; 16],
     pub comm: [u8; 16],
     pub timestamp: u64,
@@ -41,21 +39,13 @@ pub struct ConnectionEvent {
 unsafe impl plain::Plain for ConnectionEvent {}
 
 impl ConnectionEvent {
-    /// Get the source IP address as a string
-    pub fn src_ip_string(&self) -> String {
-        if self.family == AF_INET {
-            format!("{}.{}.{}.{}",
-                self.saddr[0], self.saddr[1], self.saddr[2], self.saddr[3])
-        } else {
-            format_ipv6(&self.saddr)
-        }
-    }
-
     /// Get the destination IP address as a string
     pub fn dest_ip_string(&self) -> String {
         if self.family == AF_INET {
-            format!("{}.{}.{}.{}",
-                self.daddr[0], self.daddr[1], self.daddr[2], self.daddr[3])
+            format!(
+                "{}.{}.{}.{}",
+                self.daddr[0], self.daddr[1], self.daddr[2], self.daddr[3]
+            )
         } else {
             format_ipv6(&self.daddr)
         }
@@ -88,161 +78,11 @@ impl ConnectionEvent {
 }
 
 fn format_ipv6(addr: &[u8; 16]) -> String {
-    let groups: Vec<String> = addr.chunks(2)
+    let groups: Vec<String> = addr
+        .chunks(2)
         .map(|chunk| format!("{:02x}{:02x}", chunk[0], chunk[1]))
         .collect();
     groups.join(":")
-}
-
-/// eBPF program loader and manager
-pub struct EbpfManager {
-    _object: Object,
-    _links: Vec<Link>,
-}
-
-impl EbpfManager {
-    /// Load and attach the eBPF program
-    pub fn load(bpf_path: &Path) -> Result<(Self, libbpf_rs::RingBuffer<'static>)> {
-        info!("Loading eBPF program from {:?}", bpf_path);
-
-        // Open and load the eBPF object file
-        let mut builder = ObjectBuilder::default();
-        let open_obj = builder
-            .open_file(bpf_path)
-            .context("Failed to open eBPF object file")?;
-
-        let mut obj = open_obj.load().context("Failed to load eBPF program")?;
-
-        info!("eBPF program loaded successfully");
-
-        // Get references to programs
-        let mut links = Vec::new();
-
-        // Attach tcp_connect kprobe
-        if let Some(prog) = obj.prog_mut("kprobe_tcp_connect") {
-            match prog.attach() {
-                Ok(link) => {
-                    info!("Attached kprobe: tcp_connect");
-                    links.push(link);
-                }
-                Err(e) => {
-                    warn!("Failed to attach tcp_connect kprobe: {}. TCP connections may not be monitored.", e);
-                }
-            }
-        }
-
-        // Attach udp_sendmsg kprobe
-        if let Some(prog) = obj.prog_mut("kprobe_udp_sendmsg") {
-            match prog.attach() {
-                Ok(link) => {
-                    info!("Attached kprobe: udp_sendmsg");
-                    links.push(link);
-                }
-                Err(e) => {
-                    warn!("Failed to attach udp_sendmsg kprobe: {}. UDP traffic may not be monitored.", e);
-                }
-            }
-        }
-
-        // Attach tcp_accept kretprobe
-        if let Some(prog) = obj.prog_mut("kprobe_tcp_accept") {
-            match prog.attach() {
-                Ok(link) => {
-                    info!("Attached kretprobe: inet_csk_accept (TCP accept)");
-                    links.push(link);
-                }
-                Err(e) => {
-                    warn!("Failed to attach tcp_accept kretprobe: {}. Incoming TCP connections may not be monitored.", e);
-                }
-            }
-        }
-
-        if links.is_empty() {
-            anyhow::bail!("No eBPF programs could be attached");
-        }
-
-        // Get the ring buffer map
-        let map = obj.map("events").context("Failed to find 'events' ring buffer map")?;
-
-        // Create a placeholder ring buffer - the actual one will be created with a callback
-        // We need to return the object and let the caller set up the ring buffer with their callback
-        let manager = Self {
-            _object: obj,
-            _links: links,
-        };
-
-        // Create ring buffer builder
-        // Note: We'll set up the actual ring buffer with callback in the caller
-        let rb_builder = RingBufferBuilder::new();
-
-        // This is a bit awkward because libbpf-rs's ring buffer needs to be set up
-        // with a callback. We'll handle this differently.
-
-        todo!("Ring buffer setup needs callback - see create_with_callback");
-    }
-
-    /// Create the eBPF manager with a callback for events
-    pub fn create_with_callback<F>(
-        bpf_path: &Path,
-        callback: F,
-    ) -> Result<Self>
-    where
-        F: FnMut(&[u8]) -> i32 + 'static,
-    {
-        info!("Loading eBPF program from {:?}", bpf_path);
-
-        // Open and load the eBPF object file
-        let mut builder = ObjectBuilder::default();
-        let open_obj = builder
-            .open_file(bpf_path)
-            .context("Failed to open eBPF object file")?;
-
-        let mut obj = open_obj.load().context("Failed to load eBPF program")?;
-
-        info!("eBPF program loaded successfully");
-
-        // Attach programs
-        let mut links = Vec::new();
-
-        if let Some(prog) = obj.prog_mut("kprobe_tcp_connect") {
-            match prog.attach() {
-                Ok(link) => {
-                    info!("Attached kprobe: tcp_connect");
-                    links.push(link);
-                }
-                Err(e) => warn!("Failed to attach tcp_connect: {}", e),
-            }
-        }
-
-        if let Some(prog) = obj.prog_mut("kprobe_udp_sendmsg") {
-            match prog.attach() {
-                Ok(link) => {
-                    info!("Attached kprobe: udp_sendmsg");
-                    links.push(link);
-                }
-                Err(e) => warn!("Failed to attach udp_sendmsg: {}", e),
-            }
-        }
-
-        if let Some(prog) = obj.prog_mut("kprobe_tcp_accept") {
-            match prog.attach() {
-                Ok(link) => {
-                    info!("Attached kretprobe: inet_csk_accept");
-                    links.push(link);
-                }
-                Err(e) => warn!("Failed to attach tcp_accept: {}", e),
-            }
-        }
-
-        if links.is_empty() {
-            anyhow::bail!("No eBPF programs could be attached. Make sure you're running as root.");
-        }
-
-        Ok(Self {
-            _object: obj,
-            _links: links,
-        })
-    }
 }
 
 /// Parse raw bytes into a ConnectionEvent
@@ -302,6 +142,7 @@ pub async fn start_ebpf_monitor(
     // Attach kprobes
     let mut links: Vec<Link> = Vec::new();
 
+    // Primary TCP probe: fires after destination address is written into sk.
     if let Some(prog) = obj.prog_mut("kprobe_tcp_connect") {
         match prog.attach() {
             Ok(link) => {
@@ -309,6 +150,30 @@ pub async fn start_ebpf_monitor(
                 links.push(link);
             }
             Err(e) => warn!("Failed to attach tcp_connect: {}", e),
+        }
+    }
+
+    // Fallback IPv4 TCP probe: reads destination directly from userspace sockaddr,
+    // independent of sock_common layout. Guards against the primary probe silently
+    // failing to capture the destination on unexpected kernel variants.
+    if let Some(prog) = obj.prog_mut("kprobe_tcp_v4_connect") {
+        match prog.attach() {
+            Ok(link) => {
+                info!("Attached kprobe: tcp_v4_connect (IPv4 TCP fallback)");
+                links.push(link);
+            }
+            Err(e) => warn!("Failed to attach tcp_v4_connect: {}", e),
+        }
+    }
+
+    // Fallback IPv6 TCP probe: same rationale as tcp_v4_connect above.
+    if let Some(prog) = obj.prog_mut("kprobe_tcp_v6_connect") {
+        match prog.attach() {
+            Ok(link) => {
+                info!("Attached kprobe: tcp_v6_connect (IPv6 TCP fallback)");
+                links.push(link);
+            }
+            Err(e) => warn!("Failed to attach tcp_v6_connect: {}", e),
         }
     }
 
@@ -345,26 +210,28 @@ pub async fn start_ebpf_monitor(
     let tx = event_tx.clone();
     let mut rb_builder = RingBufferBuilder::new();
 
-    rb_builder.add(&map, move |data: &[u8]| {
-        if let Some(event) = parse_event(data) {
-            trace!(
-                "eBPF event: {} {} -> {}:{} (PID: {}, {})",
-                event.comm_string(),
-                event.event_type_string(),
-                event.dest_ip_string(),
-                event.dport,
-                event.pid,
-                event.protocol_string()
-            );
+    rb_builder
+        .add(&map, move |data: &[u8]| {
+            if let Some(event) = parse_event(data) {
+                trace!(
+                    "eBPF event: {} {} -> {}:{} (PID: {}, {})",
+                    event.comm_string(),
+                    event.event_type_string(),
+                    event.dest_ip_string(),
+                    event.dport,
+                    event.pid,
+                    event.protocol_string()
+                );
 
-            // Use try_send to avoid blocking (non-blocking send)
-            let tx_clone = tx.clone();
-            if let Err(e) = tx_clone.try_send(event) {
-                warn!("Failed to send event (channel full or closed): {}", e);
+                // Use try_send to avoid blocking (non-blocking send)
+                let tx_clone = tx.clone();
+                if let Err(e) = tx_clone.try_send(event) {
+                    warn!("Failed to send event (channel full or closed): {}", e);
+                }
             }
-        }
-        0
-    }).context("Failed to add ring buffer callback")?;
+            0
+        })
+        .context("Failed to add ring buffer callback")?;
 
     let rb = rb_builder.build().context("Failed to build ring buffer")?;
 

@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
+use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
 use regex::Regex;
-use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -62,6 +62,7 @@ pub struct ConnectionInfo {
     pub dest_port: u16,
     pub dest_host: Option<String>,
     pub protocol: String,
+    #[allow(dead_code)]
     pub process_start_time: u64,
 }
 
@@ -252,13 +253,18 @@ impl RuleEngine {
     }
 
     pub fn add_process_rule(&mut self, pid: u32, rule: Rule) {
-        self.process_rules.entry(pid).or_insert_with(Vec::new).push(rule);
+        self.process_rules
+            .entry(pid)
+            .or_insert_with(Vec::new)
+            .push(rule);
     }
 
+    #[allow(dead_code)]
     pub fn remove_process_rules(&mut self, pid: u32) {
         self.process_rules.remove(&pid);
     }
 
+    #[allow(dead_code)]
     pub fn clear_temp_rules(&mut self) {
         self.process_rules.clear();
         self.rules.retain(|r| r.duration == Duration::Forever);

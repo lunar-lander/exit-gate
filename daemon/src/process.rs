@@ -1,7 +1,8 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use procfs::process::Process;
+use std::fs;
 
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
@@ -16,23 +17,22 @@ pub struct ProcessInfo {
 
 impl ProcessInfo {
     pub fn from_pid(pid: u32) -> Result<Self> {
-        let process = Process::new(pid as i32)
-            .context("Failed to open process")?;
+        let process = Process::new(pid as i32).context("Failed to open process")?;
 
-        let exe = process.exe()
+        let exe = process
+            .exe()
             .context("Failed to read executable path")?
             .to_string_lossy()
             .to_string();
 
-        let cmdline = process.cmdline()
+        let cmdline = process
+            .cmdline()
             .context("Failed to read cmdline")?
             .join(" ");
 
-        let stat = process.stat()
-            .context("Failed to read process stat")?;
+        let stat = process.stat().context("Failed to read process stat")?;
 
-        let status = process.status()
-            .context("Failed to read process status")?;
+        let status = process.status().context("Failed to read process status")?;
 
         let uid = status.ruid;
         let gid = status.rgid;
@@ -55,7 +55,7 @@ impl ProcessInfo {
         file.read_to_end(&mut buffer)?;
 
         // Calculate SHA256 hash
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(&buffer);
         let result = hasher.finalize();
@@ -80,10 +80,8 @@ pub fn get_process_tree(pid: u32) -> Result<Vec<ProcessInfo>> {
 }
 
 pub fn find_listening_ports() -> Result<Vec<(u16, u32)>> {
-    let tcp = procfs::net::tcp()
-        .context("Failed to read TCP connections")?;
-    let tcp6 = procfs::net::tcp6()
-        .context("Failed to read TCP6 connections")?;
+    let tcp = procfs::net::tcp().context("Failed to read TCP connections")?;
+    let tcp6 = procfs::net::tcp6().context("Failed to read TCP6 connections")?;
 
     let mut ports = Vec::new();
 

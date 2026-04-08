@@ -1,24 +1,39 @@
-use tokio::net::{UnixListener, UnixStream};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
-use tokio::sync::{mpsc, RwLock};
-use serde::{Deserialize, Serialize};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{info, warn, error};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{mpsc, RwLock};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum IpcMessage {
     // Client -> Daemon
     GetRules,
-    AddRule { rule: serde_json::Value },
-    UpdateRule { rule: serde_json::Value },
-    DeleteRule { rule_id: i64 },
-    GetHistory { limit: i64 },
-    GetHistorySince { timestamp: String },
+    AddRule {
+        rule: serde_json::Value,
+    },
+    UpdateRule {
+        rule: serde_json::Value,
+    },
+    DeleteRule {
+        rule_id: i64,
+    },
+    GetHistory {
+        limit: i64,
+    },
+    GetHistorySince {
+        timestamp: String,
+    },
     GetStats,
-    RespondToPrompt { prompt_id: String, action: String, remember: bool, duration: String },
+    RespondToPrompt {
+        prompt_id: String,
+        action: String,
+        remember: bool,
+        duration: String,
+    },
 
     // Daemon -> Client
     ConnectionPrompt {
@@ -32,20 +47,34 @@ pub enum IpcMessage {
         dest_host: Option<String>,
         protocol: String,
     },
-    RulesList { rules: Vec<serde_json::Value> },
-    HistoryData { entries: Vec<serde_json::Value> },
-    StatsData { stats: serde_json::Value },
-    Success { message: String },
-    Error { message: String },
+    RulesList {
+        rules: Vec<serde_json::Value>,
+    },
+    HistoryData {
+        entries: Vec<serde_json::Value>,
+    },
+    StatsData {
+        stats: serde_json::Value,
+    },
+    Success {
+        message: String,
+    },
+    Error {
+        message: String,
+    },
     ConnectionEvent {
         timestamp: String,
         pid: u32,
+        uid: u32,
+        gid: u32,
         executable: String,
+        cmdline: String,
         dest_ip: String,
         dest_port: u16,
         dest_host: Option<String>,
         protocol: String,
         action: String,
+        rule_id: Option<i64>,
     },
 }
 
@@ -63,18 +92,20 @@ impl IpcServer {
         // Remove old socket if it exists
         let path = Path::new(&self.socket_path);
         if path.exists() {
-            tokio::fs::remove_file(path).await
+            tokio::fs::remove_file(path)
+                .await
                 .context("Failed to remove old socket")?;
         }
 
         // Create parent directory
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await
+            tokio::fs::create_dir_all(parent)
+                .await
                 .context("Failed to create socket directory")?;
         }
 
-        let listener = UnixListener::bind(&self.socket_path)
-            .context("Failed to bind Unix socket")?;
+        let listener =
+            UnixListener::bind(&self.socket_path).context("Failed to bind Unix socket")?;
 
         info!("IPC server listening on {}", self.socket_path);
 
@@ -83,7 +114,8 @@ impl IpcServer {
         {
             use std::fs::Permissions;
             use std::os::unix::fs::PermissionsExt;
-            tokio::fs::set_permissions(&self.socket_path, Permissions::from_mode(0o666)).await
+            tokio::fs::set_permissions(&self.socket_path, Permissions::from_mode(0o666))
+                .await
                 .context("Failed to set socket permissions")?;
         }
 
@@ -156,13 +188,18 @@ impl IpcServer {
     }
 }
 
-async fn handle_client(reader: tokio::io::ReadHalf<UnixStream>, tx: mpsc::Sender<IpcMessage>) -> Result<()> {
+async fn handle_client(
+    reader: tokio::io::ReadHalf<UnixStream>,
+    tx: mpsc::Sender<IpcMessage>,
+) -> Result<()> {
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
 
     loop {
         line.clear();
-        let n = reader.read_line(&mut line).await
+        let n = reader
+            .read_line(&mut line)
+            .await
             .context("Failed to read from client")?;
 
         if n == 0 {
@@ -191,13 +228,16 @@ async fn handle_client(reader: tokio::io::ReadHalf<UnixStream>, tx: mpsc::Sender
     Ok(())
 }
 
+#[allow(dead_code)]
 pub struct IpcClient {
     stream: UnixStream,
 }
 
+#[allow(dead_code)]
 impl IpcClient {
     pub async fn connect(socket_path: &str) -> Result<Self> {
-        let stream = UnixStream::connect(socket_path).await
+        let stream = UnixStream::connect(socket_path)
+            .await
             .context("Failed to connect to daemon socket")?;
         Ok(Self { stream })
     }
