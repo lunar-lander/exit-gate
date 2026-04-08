@@ -16,7 +16,7 @@ import ConnectionHistory from './components/ConnectionHistory';
 import ConnectionPrompt from './components/ConnectionPrompt';
 import Dashboard from './components/Dashboard';
 import RulesManager from './components/RulesManager';
-import { ConnectionPrompt as ConnectionPromptType, HistoryEntry, Rule, Stats } from './types';
+import { Config, ConnectionPrompt as ConnectionPromptType, DefaultAction, HistoryEntry, Rule, Stats } from './types';
 
 // Modern Pastel & Dark Theme
 const theme = createTheme({
@@ -115,11 +115,13 @@ function App() {
         active_rules: 0,
     });
     const [connectionPrompts, setConnectionPrompts] = useState<ConnectionPromptType[]>([]);
+    const [config, setConfig] = useState<Config>({ default_action: 'allow' });
 
     useEffect(() => {
         // Request initial data
         window.electron.getRules();
         window.electron.getStats();
+        window.electron.getConfig();
 
         // Listen for daemon messages; capture the returned cleanup function
         const removeDaemonListener = window.electron.onDaemonMessage((message) => {
@@ -145,6 +147,10 @@ function App() {
                 case 'ConnectionEvent':
                     // Prepend to history, cap at 50 000 entries
                     setHistory((prev) => [message as unknown as HistoryEntry, ...prev].slice(0, 50000));
+                    break;
+
+                case 'ConfigData':
+                    setConfig({ default_action: message.default_action as DefaultAction });
                     break;
 
                 case 'Success':
@@ -173,6 +179,10 @@ function App() {
     ) => {
         window.electron.respondToPrompt(promptId, action, remember, duration);
         setConnectionPrompts((prev) => prev.filter((p) => p.prompt_id !== promptId));
+    };
+
+    const handleSetDefaultAction = (action: DefaultAction) => {
+        window.electron.setDefaultAction(action);
     };
 
     const handleAddRule = (rule: Rule) => {
@@ -211,7 +221,14 @@ function App() {
                 </AppBar>
 
                 <Container maxWidth="xl" sx={{ mt: { xs: 2, md: 4 }, mb: 4, flexGrow: 1, overflow: 'auto', px: { xs: 2, md: 4 } }}>
-                    {currentTab === 0 && <Dashboard stats={stats} recentConnections={history} />}
+                    {currentTab === 0 && (
+                        <Dashboard
+                            stats={stats}
+                            recentConnections={history}
+                            defaultAction={config.default_action}
+                            onSetDefaultAction={handleSetDefaultAction}
+                        />
+                    )}
                     {currentTab === 1 && (
                         <RulesManager
                             rules={rules}
