@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, Notification } from 'electron';
-import * as path from 'path';
 import * as net from 'net';
+import * as path from 'path';
 
 let mainWindow: BrowserWindow | null = null;
 let daemonSocket: net.Socket | null = null;
