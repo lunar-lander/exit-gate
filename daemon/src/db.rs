@@ -1,7 +1,7 @@
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions, Row};
+use crate::rule::{Action, Duration, Rule, RuleCriteria};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use crate::rule::{Rule, Action, Duration, RuleCriteria};
+use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 
 pub struct Database {
     pool: SqlitePool,
@@ -11,7 +11,8 @@ impl Database {
     pub async fn new(database_url: &str) -> Result<Self> {
         // Create database directory if it doesn't exist
         if let Some(parent) = std::path::Path::new(database_url).parent() {
-            tokio::fs::create_dir_all(parent).await
+            tokio::fs::create_dir_all(parent)
+                .await
                 .context("Failed to create database directory")?;
         }
 
@@ -57,7 +58,7 @@ impl Database {
                 uid INTEGER,
                 gid INTEGER
             )
-            "#
+            "#,
         )
         .execute(&self.pool)
         .await
@@ -82,20 +83,24 @@ impl Database {
                 rule_id INTEGER,
                 FOREIGN KEY (rule_id) REFERENCES rules(id)
             )
-            "#
+            "#,
         )
         .execute(&self.pool)
         .await
         .context("Failed to create connection_history table")?;
 
         // Create indices
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_history_timestamp ON connection_history(timestamp)")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_history_timestamp ON connection_history(timestamp)",
+        )
+        .execute(&self.pool)
+        .await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_history_executable ON connection_history(executable)")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_history_executable ON connection_history(executable)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_rules_enabled ON rules(enabled)")
             .execute(&self.pool)
@@ -121,7 +126,7 @@ impl Database {
                 ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
-            "#
+            "#,
         )
         .bind(&rule.name)
         .bind(rule.enabled as i32)
@@ -153,6 +158,9 @@ impl Database {
     }
 
     pub async fn update_rule(&self, rule: &Rule) -> Result<()> {
+        let id = rule
+            .id
+            .ok_or_else(|| anyhow::anyhow!("Cannot update rule without an id"))?;
         let action_str = serde_json::to_string(&rule.action)?;
         let duration_str = serde_json::to_string(&rule.duration)?;
 
@@ -166,7 +174,7 @@ impl Database {
                 dest_port_min = ?, dest_port_max = ?,
                 dest_host = ?, dest_host_regex = ?, protocol = ?, uid = ?, gid = ?
             WHERE id = ?
-            "#
+            "#,
         )
         .bind(&rule.name)
         .bind(rule.enabled as i32)
@@ -189,7 +197,7 @@ impl Database {
         .bind(&rule.criteria.protocol)
         .bind(rule.criteria.uid.map(|u| u as i32))
         .bind(rule.criteria.gid.map(|g| g as i32))
-        .bind(rule.id.unwrap())
+        .bind(id)
         .execute(&self.pool)
         .await
         .context("Failed to update rule")?;
@@ -217,7 +225,7 @@ impl Database {
                    dest_host, dest_host_regex, protocol, uid, gid
             FROM rules
             ORDER BY priority DESC, id ASC
-            "#
+            "#,
         )
         .fetch_all(&self.pool)
         .await
@@ -245,10 +253,15 @@ impl Database {
                 action,
                 duration,
                 priority: row.get("priority"),
-                created_at: row.get::<String, _>("created_at").parse::<DateTime<Utc>>()?,
-                updated_at: row.get::<String, _>("updated_at").parse::<DateTime<Utc>>()?,
+                created_at: row
+                    .get::<String, _>("created_at")
+                    .parse::<DateTime<Utc>>()?,
+                updated_at: row
+                    .get::<String, _>("updated_at")
+                    .parse::<DateTime<Utc>>()?,
                 hit_count: row.get("hit_count"),
-                last_hit: row.get::<Option<String>, _>("last_hit")
+                last_hit: row
+                    .get::<Option<String>, _>("last_hit")
                     .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
                 criteria: RuleCriteria {
                     executable: row.get("executable"),
@@ -286,7 +299,10 @@ impl Database {
         action: &Action,
         rule_id: Option<i64>,
     ) -> Result<()> {
-        let action_str = serde_json::to_string(action)?;
+        let action_str = match action {
+            Action::Allow => "allow",
+            Action::Deny => "deny",
+        };
 
         sqlx::query(
             r#"
@@ -294,7 +310,7 @@ impl Database {
                 timestamp, pid, uid, gid, executable, cmdline,
                 dest_ip, dest_port, dest_host, protocol, action, rule_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
+            "#,
         )
         .bind(timestamp.to_rfc3339())
         .bind(pid as i32)
@@ -306,7 +322,7 @@ impl Database {
         .bind(dest_port as i32)
         .bind(dest_host)
         .bind(protocol)
-        .bind(&action_str)
+        .bind(action_str)
         .bind(rule_id)
         .execute(&self.pool)
         .await
@@ -321,7 +337,7 @@ impl Database {
             SELECT * FROM connection_history
             ORDER BY timestamp DESC
             LIMIT ?
-            "#
+            "#,
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -331,13 +347,16 @@ impl Database {
         self.map_history_rows(rows)
     }
 
-    pub async fn get_connection_history_since(&self, since: DateTime<Utc>) -> Result<Vec<serde_json::Value>> {
+    pub async fn get_connection_history_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<serde_json::Value>> {
         let rows = sqlx::query(
             r#"
             SELECT * FROM connection_history
             WHERE timestamp >= ?
             ORDER BY timestamp DESC
-            "#
+            "#,
         )
         .bind(since.to_rfc3339())
         .fetch_all(&self.pool)
@@ -347,29 +366,69 @@ impl Database {
         self.map_history_rows(rows)
     }
 
-    fn map_history_rows(&self, rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<serde_json::Value>> {
+    fn map_history_rows(
+        &self,
+        rows: Vec<sqlx::sqlite::SqliteRow>,
+    ) -> Result<Vec<serde_json::Value>> {
         let mut history = Vec::new();
         for row in rows {
             let mut entry = serde_json::Map::new();
             entry.insert("id".to_string(), serde_json::json!(row.get::<i64, _>("id")));
-            entry.insert("timestamp".to_string(), serde_json::json!(row.get::<String, _>("timestamp")));
-            entry.insert("pid".to_string(), serde_json::json!(row.get::<i32, _>("pid")));
-            entry.insert("uid".to_string(), serde_json::json!(row.get::<i32, _>("uid")));
-            entry.insert("gid".to_string(), serde_json::json!(row.get::<i32, _>("gid")));
-            entry.insert("executable".to_string(), serde_json::json!(row.get::<String, _>("executable")));
-            entry.insert("cmdline".to_string(), serde_json::json!(row.get::<String, _>("cmdline")));
-            entry.insert("dest_ip".to_string(), serde_json::json!(row.get::<String, _>("dest_ip")));
-            entry.insert("dest_port".to_string(), serde_json::json!(row.get::<i32, _>("dest_port")));
-            entry.insert("dest_host".to_string(), serde_json::json!(row.get::<Option<String>, _>("dest_host")));
-            entry.insert("protocol".to_string(), serde_json::json!(row.get::<String, _>("protocol")));
-            entry.insert("action".to_string(), serde_json::json!(row.get::<String, _>("action")));
-            entry.insert("rule_id".to_string(), serde_json::json!(row.get::<Option<i64>, _>("rule_id")));
+            entry.insert(
+                "timestamp".to_string(),
+                serde_json::json!(row.get::<String, _>("timestamp")),
+            );
+            entry.insert(
+                "pid".to_string(),
+                serde_json::json!(row.get::<i32, _>("pid")),
+            );
+            entry.insert(
+                "uid".to_string(),
+                serde_json::json!(row.get::<i32, _>("uid")),
+            );
+            entry.insert(
+                "gid".to_string(),
+                serde_json::json!(row.get::<i32, _>("gid")),
+            );
+            entry.insert(
+                "executable".to_string(),
+                serde_json::json!(row.get::<String, _>("executable")),
+            );
+            entry.insert(
+                "cmdline".to_string(),
+                serde_json::json!(row.get::<String, _>("cmdline")),
+            );
+            entry.insert(
+                "dest_ip".to_string(),
+                serde_json::json!(row.get::<String, _>("dest_ip")),
+            );
+            entry.insert(
+                "dest_port".to_string(),
+                serde_json::json!(row.get::<i32, _>("dest_port")),
+            );
+            entry.insert(
+                "dest_host".to_string(),
+                serde_json::json!(row.get::<Option<String>, _>("dest_host")),
+            );
+            entry.insert(
+                "protocol".to_string(),
+                serde_json::json!(row.get::<String, _>("protocol")),
+            );
+            entry.insert(
+                "action".to_string(),
+                serde_json::json!(row.get::<String, _>("action")),
+            );
+            entry.insert(
+                "rule_id".to_string(),
+                serde_json::json!(row.get::<Option<i64>, _>("rule_id")),
+            );
 
             history.push(serde_json::Value::Object(entry));
         }
         Ok(history)
     }
 
+    #[allow(dead_code)]
     pub async fn cleanup_old_history(&self, max_entries: i64) -> Result<()> {
         sqlx::query(
             r#"
@@ -379,7 +438,7 @@ impl Database {
                 ORDER BY timestamp DESC
                 LIMIT ?
             )
-            "#
+            "#,
         )
         .bind(max_entries)
         .execute(&self.pool)
