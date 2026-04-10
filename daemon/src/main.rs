@@ -406,7 +406,10 @@ async fn handle_ipc_messages(
             IpcMessage::GetConfig => {
                 let default_action = state.default_action.read().await.clone();
                 let _ = resp_tx
-                    .send(("broadcast".to_string(), IpcMessage::ConfigData { default_action }))
+                    .send((
+                        "broadcast".to_string(),
+                        IpcMessage::ConfigData { default_action },
+                    ))
                     .await;
             }
 
@@ -416,13 +419,24 @@ async fn handle_ipc_messages(
                     *state.default_action.write().await = action.clone();
                     info!("Default action changed to: {}", action);
                     let _ = resp_tx
-                        .send(("broadcast".to_string(), IpcMessage::ConfigData { default_action: action }))
+                        .send((
+                            "broadcast".to_string(),
+                            IpcMessage::ConfigData {
+                                default_action: action,
+                            },
+                        ))
                         .await;
                 } else {
                     let _ = resp_tx
-                        .send(("broadcast".to_string(), IpcMessage::Error {
-                            message: format!("Invalid default action '{}'; must be allow, deny, or prompt", action),
-                        }))
+                        .send((
+                            "broadcast".to_string(),
+                            IpcMessage::Error {
+                                message: format!(
+                                    "Invalid default action '{}'; must be allow, deny, or prompt",
+                                    action
+                                ),
+                            },
+                        ))
                         .await;
                 }
             }
@@ -600,7 +614,7 @@ async fn handle_ebpf_event(
     // Deduplicate TCP events: both `kprobe/tcp_connect` and
     // `kprobe/tcp_v4_connect` (or tcp_v6_connect) can fire for the same
     // outbound TCP connection. Keep only the first one seen.
-    use crate::ebpf::{IPPROTO_TCP};
+    use crate::ebpf::IPPROTO_TCP;
     if event.protocol == IPPROTO_TCP {
         let key = ConnKey {
             pid: conn_info.pid,
@@ -612,7 +626,10 @@ async fn handle_ebpf_event(
             // Duplicate — already handled this exact connection tuple
             trace!(
                 "Deduplicated TCP event: {} ({}) -> {}:{}",
-                executable, event.pid, dest_ip, event.dport
+                executable,
+                event.pid,
+                dest_ip,
+                event.dport
             );
             return;
         }
@@ -714,38 +731,43 @@ async fn handle_ebpf_event(
                 stats.allowed += 1;
                 drop(stats);
 
-                let _ = state.db.save_connection_history(
-                    Utc::now(),
-                    conn_info.pid,
-                    conn_info.uid,
-                    conn_info.gid,
-                    &conn_info.executable,
-                    &conn_info.cmdline,
-                    &conn_info.dest_ip.to_string(),
-                    conn_info.dest_port,
-                    conn_info.dest_host.as_deref(),
-                    &conn_info.protocol,
-                    &Action::Allow,
-                    None,
-                ).await;
+                let _ = state
+                    .db
+                    .save_connection_history(
+                        Utc::now(),
+                        conn_info.pid,
+                        conn_info.uid,
+                        conn_info.gid,
+                        &conn_info.executable,
+                        &conn_info.cmdline,
+                        &conn_info.dest_ip.to_string(),
+                        conn_info.dest_port,
+                        conn_info.dest_host.as_deref(),
+                        &conn_info.protocol,
+                        &Action::Allow,
+                        None,
+                    )
+                    .await;
 
-                let _ = ipc_resp_tx.send((
-                    "broadcast".to_string(),
-                    IpcMessage::ConnectionEvent {
-                        timestamp: Utc::now().to_rfc3339(),
-                        pid: conn_info.pid,
-                        uid: conn_info.uid,
-                        gid: conn_info.gid,
-                        executable: conn_info.executable,
-                        cmdline: conn_info.cmdline,
-                        dest_ip: conn_info.dest_ip.to_string(),
-                        dest_port: conn_info.dest_port,
-                        dest_host: conn_info.dest_host,
-                        protocol: conn_info.protocol,
-                        action: "allow".to_string(),
-                        rule_id: None,
-                    },
-                )).await;
+                let _ = ipc_resp_tx
+                    .send((
+                        "broadcast".to_string(),
+                        IpcMessage::ConnectionEvent {
+                            timestamp: Utc::now().to_rfc3339(),
+                            pid: conn_info.pid,
+                            uid: conn_info.uid,
+                            gid: conn_info.gid,
+                            executable: conn_info.executable,
+                            cmdline: conn_info.cmdline,
+                            dest_ip: conn_info.dest_ip.to_string(),
+                            dest_port: conn_info.dest_port,
+                            dest_host: conn_info.dest_host,
+                            protocol: conn_info.protocol,
+                            action: "allow".to_string(),
+                            rule_id: None,
+                        },
+                    ))
+                    .await;
 
                 trace!("Default action: allowed (no matching rule)");
             }
@@ -757,38 +779,43 @@ async fn handle_ebpf_event(
                 stats.denied += 1;
                 drop(stats);
 
-                let _ = state.db.save_connection_history(
-                    Utc::now(),
-                    conn_info.pid,
-                    conn_info.uid,
-                    conn_info.gid,
-                    &conn_info.executable,
-                    &conn_info.cmdline,
-                    &conn_info.dest_ip.to_string(),
-                    conn_info.dest_port,
-                    conn_info.dest_host.as_deref(),
-                    &conn_info.protocol,
-                    &Action::Deny,
-                    None,
-                ).await;
+                let _ = state
+                    .db
+                    .save_connection_history(
+                        Utc::now(),
+                        conn_info.pid,
+                        conn_info.uid,
+                        conn_info.gid,
+                        &conn_info.executable,
+                        &conn_info.cmdline,
+                        &conn_info.dest_ip.to_string(),
+                        conn_info.dest_port,
+                        conn_info.dest_host.as_deref(),
+                        &conn_info.protocol,
+                        &Action::Deny,
+                        None,
+                    )
+                    .await;
 
-                let _ = ipc_resp_tx.send((
-                    "broadcast".to_string(),
-                    IpcMessage::ConnectionEvent {
-                        timestamp: Utc::now().to_rfc3339(),
-                        pid: conn_info.pid,
-                        uid: conn_info.uid,
-                        gid: conn_info.gid,
-                        executable: conn_info.executable,
-                        cmdline: conn_info.cmdline,
-                        dest_ip: conn_info.dest_ip.to_string(),
-                        dest_port: conn_info.dest_port,
-                        dest_host: conn_info.dest_host,
-                        protocol: conn_info.protocol,
-                        action: "deny".to_string(),
-                        rule_id: None,
-                    },
-                )).await;
+                let _ = ipc_resp_tx
+                    .send((
+                        "broadcast".to_string(),
+                        IpcMessage::ConnectionEvent {
+                            timestamp: Utc::now().to_rfc3339(),
+                            pid: conn_info.pid,
+                            uid: conn_info.uid,
+                            gid: conn_info.gid,
+                            executable: conn_info.executable,
+                            cmdline: conn_info.cmdline,
+                            dest_ip: conn_info.dest_ip.to_string(),
+                            dest_port: conn_info.dest_port,
+                            dest_host: conn_info.dest_host,
+                            protocol: conn_info.protocol,
+                            action: "deny".to_string(),
+                            rule_id: None,
+                        },
+                    ))
+                    .await;
 
                 debug!("Default action: denied (no matching rule)");
             }
