@@ -30,6 +30,9 @@ out/
 .DS_Store
 Thumbs.db
 
+# Local tooling symlinks
+/bin/
+
 # Database and runtime
 *.db
 *.db-shm

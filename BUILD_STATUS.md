@@ -1,118 +1,38 @@
 # Build Status
 
-## ✅ **ALL COMPONENTS BUILD SUCCESSFULLY!**
+## All components build and package cleanly (v0.2.0)
 
-### Build Summary
+| Component | Status | Artifact |
+|-----------|--------|----------|
+| eBPF monitor | ✅ | `ebpf/network_monitor.bpf.o` |
+| Rust daemon | ✅ | `daemon/target/release/exit-gate-daemon` |
+| Electron GUI | ✅ | `electron/dist/` |
+| AppImage | ✅ | `electron/dist/exit-gate-0.2.0-x86_64.AppImage` |
+| Debian package | ✅ | `electron/dist/exit-gate-0.2.0-amd64.deb` |
 
-```
-[1/3] eBPF programs ............ ✅ SUCCESS
-[2/3] Rust daemon .............. ✅ SUCCESS  
-[3/3] Electron app ............. ✅ SUCCESS
-```
+Static check: `cd electron && npm run typecheck` (TypeScript, renderer + main).
 
----
+## Packaging model (v0.2.0)
 
-## Component Status
+Both packages bundle the daemon, eBPF objects, default config and the
+systemd unit under `resources/daemon/`, together with an idempotent
+`install-daemon.sh`:
 
-### 1. eBPF Network Monitor ✅
+- **deb**: `postinst` runs `install-daemon.sh` automatically — installing the
+  package is a complete setup (daemon installed to `/usr/local/bin`, eBPF to
+  `/usr/local/lib/exit-gate/bpf`, service enabled and started).
+- **AppImage**: portable. On first run, if the daemon is unreachable, the GUI
+  offers to run `install-daemon.sh` via `pkexec` and connects automatically
+  once the service is up.
 
-**Files:**
-- `ebpf/network_monitor.bpf.c` - Self-contained eBPF program
-- `ebpf/network_monitor.bpf.o` - Compiled bytecode (13KB)
+The daemon keeps running (IPC up, eBPF error logged) even when the eBPF
+monitor cannot load, so a bad kernel/permission combo never crash-loops the
+service.
 
-**Features:**
-- TCP connection tracking via `tcp_connect` kprobe
-- UDP packet monitoring via `udp_sendmsg` kprobe
-- Incoming connections via `inet_csk_accept` kretprobe
-- Ring buffer for efficient event delivery
-- IPv4 and IPv6 support
-- Process metadata (PID, UID, GID, command)
+## Verified
 
-### 2. Rust Daemon ✅
-
-**Binary:** `daemon/target/release/exit-gate-daemon`
-
-**Modules:**
-- Rule engine with priority-based matching
-- SQLite database for persistent storage
-- Unix socket IPC server
-- Process information from /proc
-- Async architecture using Tokio
-
-### 3. Electron GUI ✅
-
-**Output:** `electron/dist/` (800KB bundled)
-
-**Components:**
-- Dashboard with statistics
-- Connection prompt dialogs
-- Rule management interface
-- Connection history viewer
-- Material-UI dark theme
-
----
-
-## Build Process
-
-```bash
-# Full build
-make build
-
-# Or individually
-cd ebpf && make
-cd daemon && cargo build --release
-cd electron && npm install && npm run build
-```
-
----
-
-## What Was Fixed
-
-### eBPF
-✅ Removed libbpf dependencies
-✅ Fixed PT_REGS register names
-✅ Self-contained helper definitions
-
-### Rust Daemon
-✅ Removed libbpf-cargo dependency
-✅ Fixed procfs API (v0.16 compatibility)
-✅ Added missing sqlx::Row import
-
-### Electron
-✅ Fixed TypeScript type assertions
-✅ Removed unused imports
-✅ Fixed IPC parameter warnings
-✅ Created separate tsconfig for main process compilation
-✅ Added packaging metadata (author email, homepage, maintainer)
-✅ Successfully built AppImage and .deb packages
-
----
-
-## Installation
-
-```bash
-# Install
-sudo ./install.sh
-
-# Start
-sudo systemctl start exit-gate
-sudo systemctl enable exit-gate
-
-# Run GUI
-cd electron && npm start
-```
-
----
-
-## Success! 🎉
-
-All components build and package successfully with only minor warnings (unused helper functions).
-
-**Total:** 40+ files, 5,200+ lines of code
-**Build time:** ~90 seconds (build), ~5 minutes (full packaging)
-**Technologies:** C (eBPF), Rust, TypeScript/React
-**Deliverables:**
-- eBPF bytecode (13 KB)
-- Daemon binary (6.0 MB)
-- AppImage (429 MB)
-- Debian package (357 MB)
+- asar contains `dist/**` including `logo.png` (toolbar logo renders in packaged apps)
+- deb control archive contains `postinst` / `prerm` / `postrm`
+- deb payload: `/opt/Exit Gate/…` + desktop entry + hicolor icon
+- packaged GUI launches and reconnects cleanly when the daemon is absent
+- `install-daemon.sh` and maintainer scripts pass `bash -n`

@@ -88,12 +88,29 @@ After building:
 - **Electron web**: `electron/dist/` (800 KB)
 
 After packaging:
-- **AppImage**: `electron/dist/Exit Gate-0.1.0.AppImage` (429 MB)
-- **Debian package**: `electron/dist/exit-gate_0.1.0_amd64.deb` (357 MB)
+- **AppImage**: `electron/dist/exit-gate-0.2.0-x86_64.AppImage`
+- **Debian package**: `electron/dist/exit-gate-0.2.0-amd64.deb`
 
 ## Installation
 
-### Daemon Installation
+### Option 1: Debian package (recommended, all-in-one)
+```bash
+sudo dpkg -i electron/dist/exit-gate-0.2.0-amd64.deb
+```
+This installs the GUI **and** the daemon, eBPF monitors, configuration and
+systemd service, then enables and starts the service automatically. No extra
+steps needed — launch `exit-gate` from your application menu.
+
+### Option 2: AppImage (portable)
+```bash
+chmod +x electron/dist/exit-gate-0.2.0-x86_64.AppImage
+./electron/dist/exit-gate-0.2.0-x86_64.AppImage
+```
+On first run the app detects the missing daemon and offers to install and
+start it (your password is requested via `pkexec`). The GUI connects
+automatically once the service is up.
+
+### Option 3: From source (daemon only)
 ```bash
 sudo ./install.sh
 ```
@@ -103,20 +120,6 @@ This installs:
 - `/usr/local/lib/exit-gate/bpf/*.o` - eBPF programs
 - `/etc/exit-gate/config.toml` - Configuration
 - `/etc/systemd/system/exit-gate.service` - Systemd service
-
-### GUI Installation
-
-**Option 1: AppImage (recommended)**
-```bash
-# Make executable and run
-chmod +x electron/dist/Exit\ Gate-0.1.0.AppImage
-./electron/dist/Exit\ Gate-0.1.0.AppImage
-```
-
-**Option 2: Debian package**
-```bash
-sudo dpkg -i electron/dist/exit-gate_0.1.0_amd64.deb
-```
 
 ## Usage
 
@@ -154,16 +157,22 @@ exit-gate
 Edit `/etc/exit-gate/config.toml`:
 ```toml
 [daemon]
-socket_path = "/var/run/exit-gate/daemon.sock"
+socket_path = "/var/run/exit-gate/exit-gate.sock"
 log_level = "info"
-enable_ebpf = true
+bpf_path = "/usr/local/lib/exit-gate/bpf"
+
+[notifications]
+timeout_seconds = 30
+# Default action for connections that match no rule:
+# "allow" (monitor mode, recommended), "deny", or "prompt"
+default_action = "allow"
 
 [database]
-path = "/var/lib/exit-gate/exit-gate.db"
-
-[ui]
-prompt_timeout = 60
+db_path = "/var/lib/exit-gate/rules.db"
 ```
+
+The default action can also be switched live from the dashboard
+(**Allow All / Prompt / Deny All**); the file only provides the startup value.
 
 ## Development
 
