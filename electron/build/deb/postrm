@@ -1,0 +1,15 @@
+#!/bin/bash
+# Exit Gate debian postrm — cleans up; purges state only on purge.
+set -e
+
+if [ "$1" = "purge" ]; then
+    rm -f /etc/systemd/system/exit-gate.service
+    rm -rf /etc/exit-gate
+    rm -rf /var/lib/exit-gate
+    rm -f /usr/local/bin/exit-gate-daemon
+    rm -rf /usr/local/lib/exit-gate
+fi
+
+systemctl daemon-reload || true
+
+exit 0

@@ -1,6 +1,6 @@
 {
   "name": "exit-gate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Linux Application Firewall with eBPF",
   "main": "dist/main.js",
   "homepage": "https://github.com/exitgate/exitgate",
@@ -15,6 +15,7 @@
     "dev:react": "vite",
     "dev:electron": "vite build && tsc -p tsconfig.electron.json && electron .",
     "build": "vite build && tsc -p tsconfig.electron.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "package": "electron-builder",
     "package:linux": "electron-builder --linux"
   },
@@ -43,22 +44,51 @@
   "build": {
     "appId": "com.exitgate.firewall",
     "productName": "Exit Gate",
+    "icon": "public/logo.png",
     "linux": {
-      "target": ["AppImage", "deb"],
       "category": "Network",
-      "maintainer": "Exit Gate Contributors <developers@exitgate.dev>"
+      "maintainer": "Exit Gate Contributors <developers@exitgate.dev>",
+      "artifactName": "exit-gate-${version}-${arch}.${ext}",
+      "target": ["AppImage", "deb"]
+    },
+    "deb": {
+      "afterInstall": "build/deb/postinst",
+      "afterRemove": "build/deb/postrm",
+      "fpm": ["--before-remove=build/deb/prerm"]
     },
     "files": [
-      "dist/main.js",
-      "dist/preload.js",
-      "dist/index.html",
-      "dist/assets/**/*",
+      "dist/**/*",
+      "!dist/linux-unpacked/**",
+      "!dist/win-unpacked/**",
+      "!dist/mac/**",
+      "!dist/*-unpacked/**",
+      "!dist/*.AppImage",
+      "!dist/*.deb",
+      "!dist/*.yml",
+      "!dist/*.yaml",
       "package.json"
     ],
     "extraResources": [
       {
         "from": "../daemon/target/release/exit-gate-daemon",
         "to": "daemon/exit-gate-daemon"
+      },
+      {
+        "from": "../ebpf",
+        "to": "daemon/bpf",
+        "filter": ["*.o"]
+      },
+      {
+        "from": "../config/config.toml",
+        "to": "daemon/config.toml"
+      },
+      {
+        "from": "../systemd/exit-gate.service",
+        "to": "daemon/exit-gate.service"
+      },
+      {
+        "from": "scripts/install-daemon.sh",
+        "to": "daemon/install-daemon.sh"
       }
     ]
   }

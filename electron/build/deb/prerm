@@ -1,0 +1,10 @@
+#!/bin/bash
+# Exit Gate debian prerm — stops the daemon when the package is removed.
+set -e
+
+if [ "$1" = "remove" ]; then
+    systemctl stop exit-gate.service || true
+    systemctl disable exit-gate.service || true
+fi
+
+exit 0

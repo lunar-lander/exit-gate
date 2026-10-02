@@ -1,0 +1,27 @@
+#!/bin/bash
+# Exit Gate debian postinst — installs and starts the bundled daemon.
+set -e
+
+# Locate the daemon resources bundled with the GUI (layout depends on the
+# electron-builder version/target, so probe the known candidates).
+RES_DIR=""
+for d in \
+    /usr/lib/exit-gate/resources/daemon \
+    /usr/lib/exit-gate/daemon \
+    "/opt/Exit Gate/resources/daemon"; do
+    if [ -f "$d/install-daemon.sh" ]; then
+        RES_DIR="$d"
+        break
+    fi
+done
+
+if [ -z "$RES_DIR" ]; then
+    echo "exit-gate: bundled daemon resources not found; skipping daemon setup." >&2
+    exit 0
+fi
+
+bash "$RES_DIR/install-daemon.sh" || {
+    echo "exit-gate: daemon setup failed; the GUI is installed but monitoring is inactive." >&2
+    echo "Retry later with: sudo bash $RES_DIR/install-daemon.sh" >&2
+    exit 0
+}
