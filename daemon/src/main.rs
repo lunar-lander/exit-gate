@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
 
     // Start IPC server
     let ipc_server = IpcServer::new(config.daemon.socket_path.clone(), ipc_tx.clone());
-    let ipc_handle = tokio::spawn({
+    let mut ipc_handle = tokio::spawn({
         async move {
             if let Err(e) = ipc_server.start(ipc_resp_rx).await {
                 error!("IPC server error: {}", e);
@@ -145,7 +145,7 @@ async fn main() -> Result<()> {
     // Handle IPC messages
     let state_clone = state.clone();
     let ipc_resp_tx_clone = ipc_resp_tx.clone();
-    let ipc_handler = tokio::spawn(async move {
+    let mut ipc_handler = tokio::spawn(async move {
         handle_ipc_messages(state_clone, &mut ipc_rx, ipc_resp_tx_clone).await;
     });
 
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
     let (ebpf_tx, mut ebpf_rx) = mpsc::channel::<ConnectionEvent>(10000);
     let bpf_path = config.daemon.bpf_path.clone();
 
-    let ebpf_handle = tokio::spawn(async move {
+    let mut ebpf_handle = tokio::spawn(async move {
         // Run eBPF monitor in a blocking task since libbpf-rs isn't async
         let result = tokio::task::spawn_blocking(move || {
             // Create a runtime for the blocking context
@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
     // Handle eBPF events
     let state_for_ebpf = state.clone();
     let ipc_resp_tx_for_ebpf = ipc_resp_tx.clone();
-    let ebpf_event_handler = tokio::spawn(async move {
+    let mut ebpf_event_handler = tokio::spawn(async move {
         while let Some(event) = ebpf_rx.recv().await {
             handle_ebpf_event(state_for_ebpf.clone(), ipc_resp_tx_for_ebpf.clone(), event).await;
         }
@@ -187,22 +187,37 @@ async fn main() -> Result<()> {
 
     info!("Daemon initialized and ready");
 
-    // Wait for tasks
-    tokio::select! {
-        _ = ipc_handle => {
-            error!("IPC server terminated");
-        }
-        _ = ipc_handler => {
-            error!("IPC handler terminated");
-        }
-        _ = ebpf_handle => {
-            error!("eBPF monitor terminated");
-        }
-        _ = ebpf_event_handler => {
-            error!("eBPF event handler terminated");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl+C, shutting down...");
+    // Wait for tasks. An eBPF failure (missing object, privileged kprobes
+    // disabled, old kernel) is logged but does NOT kill the daemon: the IPC
+    // layer stays up so the GUI remains usable and reports the problem,
+    // instead of systemd restart-looping a crashing service.
+    loop {
+        tokio::select! {
+            _ = &mut ipc_handle => {
+                error!("IPC server terminated");
+                break;
+            }
+            _ = &mut ipc_handler => {
+                error!("IPC handler terminated");
+                break;
+            }
+            _ = &mut ebpf_handle => {
+                error!(
+                    "eBPF monitor terminated (check that the BPF objects exist at '{}' and the kernel supports kprobes); \
+                    continuing without kernel monitoring",
+                    config.daemon.bpf_path
+                );
+                // Replace the finished handle so select! does not spin on it.
+                ebpf_handle = tokio::spawn(std::future::pending::<()>());
+            }
+            _ = &mut ebpf_event_handler => {
+                error!("eBPF event handler terminated");
+                break;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received Ctrl+C, shutting down...");
+                break;
+            }
         }
     }
 

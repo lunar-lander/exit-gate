@@ -1,6 +1,6 @@
 [package]
 name = "exit-gate-daemon"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Exit Gate Contributors"]
 license = "MIT"

@@ -16,8 +16,12 @@ bpf_path = "/usr/local/lib/exit-gate/bpf"
 # After this timeout, the default action will be applied
 timeout_seconds = 30
 
-# Default action when timeout expires: allow or deny
-default_action = "deny"
+# Default action when no rule matches a connection:
+#   "allow"  - monitor mode (recommended): pass traffic, log it, no prompts
+#   "deny"   - blocklist inverse: block everything not explicitly allowed
+#   "prompt" - ask the user for every unmatched connection
+# This is the runtime default; it can be changed live from the GUI dashboard.
+default_action = "allow"
 
 # Monitor outbound connections (recommended)
 monitor_outbound = true
