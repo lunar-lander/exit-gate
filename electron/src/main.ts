@@ -1,11 +1,28 @@
-import { app, BrowserWindow, ipcMain, Notification } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron';
+import { spawn } from 'child_process';
+import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 
 let mainWindow: BrowserWindow | null = null;
 let daemonSocket: net.Socket | null = null;
+let reconnectTimer: NodeJS.Timeout | null = null;
+let daemonStatus: 'connected' | 'disconnected' = 'disconnected';
+let installOffered = false;
 
 const SOCKET_PATH = '/var/run/exit-gate/exit-gate.sock';
+const RECONNECT_INTERVAL_MS = 5000;
+
+function getResourceDir(): string {
+  return app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
+}
+
+function setDaemonStatus(status: 'connected' | 'disconnected') {
+  daemonStatus = status;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('daemon-status', status);
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -16,11 +33,11 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
     },
-    icon: path.join(__dirname, '../public/icon.png'),
+    icon: path.join(__dirname, 'logo.png'),
   });
 
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:3000');
+  if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, 'index.html'));
@@ -31,17 +48,38 @@ function createWindow() {
   });
 }
 
-function connectToDaemon() {
-  daemonSocket = new net.Socket();
+function scheduleReconnect() {
+  if (reconnectTimer) return; // never stack retry loops
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectToDaemon();
+  }, RECONNECT_INTERVAL_MS);
+}
 
-  daemonSocket.connect(SOCKET_PATH, () => {
+function destroySocket() {
+  if (daemonSocket) {
+    daemonSocket.removeAllListeners();
+    daemonSocket.destroy();
+    daemonSocket = null;
+  }
+}
+
+function connectToDaemon() {
+  destroySocket();
+  const socket = new net.Socket();
+  daemonSocket = socket;
+
+  socket.connect(SOCKET_PATH, () => {
     console.log('Connected to daemon');
+    setDaemonStatus('connected');
+    installOffered = false;
     sendToDaemon({ type: 'GetRules' });
     sendToDaemon({ type: 'GetStats' });
+    sendToDaemon({ type: 'GetConfig' });
   });
 
   let buffer = '';
-  daemonSocket.on('data', (data) => {
+  socket.on('data', (data) => {
     buffer += data.toString();
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
@@ -58,18 +96,59 @@ function connectToDaemon() {
     }
   });
 
-  daemonSocket.on('error', (err) => {
-    console.error('Daemon socket error:', err);
-    setTimeout(connectToDaemon, 5000); // Retry connection
+  socket.on('error', (err) => {
+    console.error('Daemon socket error:', err.message);
   });
 
-  daemonSocket.on('close', () => {
+  // 'close' always fires after 'error' — the single reconnect path
+  socket.on('close', () => {
     console.log('Disconnected from daemon');
-    setTimeout(connectToDaemon, 5000); // Retry connection
+    setDaemonStatus('disconnected');
+    if (app.isPackaged) {
+      maybeOfferDaemonInstall();
+    }
+    scheduleReconnect();
   });
 }
 
-function sendToDaemon(message: any) {
+/**
+ * AppImage / tar users get a one-shot offer to install and start the
+ * bundled daemon with polkit privileges when the daemon is unreachable.
+ */
+function maybeOfferDaemonInstall() {
+  if (installOffered || daemonStatus === 'connected') return;
+  const installScript = path.join(getResourceDir(), 'daemon', 'install-daemon.sh');
+  if (!fs.existsSync(installScript)) return;
+
+  installOffered = true;
+  dialog
+    .showMessageBox({
+      type: 'question',
+      title: 'Exit Gate daemon not running',
+      message: 'The Exit Gate daemon is not running.',
+      detail:
+        'Install and start it now? This copies the daemon, eBPF monitors and ' +
+        'systemd service to the system and starts the service. Your password ' +
+        'will be requested.',
+      buttons: ['Install and start', 'Retry quietly'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    .then(({ response }) => {
+      if (response !== 0) return;
+      const child = spawn('pkexec', ['bash', installScript], { stdio: 'ignore' });
+      child.on('error', (err) => {
+        console.error('Failed to launch installer:', err.message);
+        installOffered = false;
+      });
+      child.on('exit', (code) => {
+        if (code !== 0) installOffered = false; // allow a retry later
+      });
+    })
+    .catch(() => {});
+}
+
+function sendToDaemon(message: unknown) {
   if (daemonSocket && daemonSocket.writable) {
     daemonSocket.write(JSON.stringify(message) + '\n');
   } else {
@@ -78,29 +157,24 @@ function sendToDaemon(message: any) {
 }
 
 function handleDaemonMessage(message: any) {
-  console.log('Received from daemon:', message);
-
-  if (mainWindow && mainWindow.webContents) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('daemon-message', message);
   }
 
-  // Handle connection prompts
   if (message.type === 'ConnectionPrompt') {
     showConnectionPrompt(message);
   }
 }
 
 function showConnectionPrompt(data: any) {
-  // Create notification
   const notification = new Notification({
     title: 'Exit Gate - Connection Request',
     body: `${data.executable} wants to connect to ${data.dest_host || data.dest_ip}:${data.dest_port}`,
-    urgency: 'critical',
+    urgency: 'critical' as any,
   });
 
   notification.show();
 
-  // Focus main window or create prompt window
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
@@ -113,6 +187,19 @@ function showConnectionPrompt(data: any) {
 ipcMain.handle('send-to-daemon', async (_event, message) => {
   sendToDaemon(message);
   return { success: true };
+});
+
+ipcMain.handle('get-daemon-status', async () => daemonStatus);
+
+ipcMain.handle('install-daemon', async () => {
+  const installScript = path.join(getResourceDir(), 'daemon', 'install-daemon.sh');
+  return new Promise((resolve) => {
+    const child = spawn('pkexec', ['bash', installScript], { stdio: 'ignore' });
+    child.on('error', (err) => resolve({ success: false, error: err.message }));
+    child.on('exit', (code) =>
+      resolve({ success: code === 0, code })
+    );
+  });
 });
 
 ipcMain.handle('get-rules', async () => {
@@ -179,7 +266,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('quit', () => {
-  if (daemonSocket) {
-    daemonSocket.destroy();
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
+  destroySocket();
 });

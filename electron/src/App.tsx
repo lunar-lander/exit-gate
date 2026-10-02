@@ -1,6 +1,7 @@
 import {
     AppBar,
     Box,
+    Chip,
     Container,
     createTheme,
     CssBaseline,
@@ -16,7 +17,7 @@ import ConnectionHistory from './components/ConnectionHistory';
 import ConnectionPrompt from './components/ConnectionPrompt';
 import Dashboard from './components/Dashboard';
 import RulesManager from './components/RulesManager';
-import { Config, ConnectionPrompt as ConnectionPromptType, DefaultAction, HistoryEntry, Rule, Stats } from './types';
+import { Config, ConnectionPrompt as ConnectionPromptType, DaemonStatus, DefaultAction, HistoryEntry, Rule, Stats } from './types';
 
 // Modern Pastel & Dark Theme
 const theme = createTheme({
@@ -116,6 +117,15 @@ function App() {
     });
     const [connectionPrompts, setConnectionPrompts] = useState<ConnectionPromptType[]>([]);
     const [config, setConfig] = useState<Config>({ default_action: 'allow' });
+    const [daemonStatus, setDaemonStatus] = useState<DaemonStatus>('disconnected');
+
+    useEffect(() => {
+        window.electron.getDaemonStatus().then((status) => setDaemonStatus(status));
+        const removeStatusListener = window.electron.onDaemonStatus((status) => setDaemonStatus(status));
+        return () => {
+            removeStatusListener();
+        };
+    }, []);
 
     useEffect(() => {
         // Request initial data
@@ -207,6 +217,29 @@ function App() {
                         <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
                             Exit Gate
                         </Typography>
+                        <Chip
+                            size="small"
+                            icon={
+                                <Box
+                                    component="span"
+                                    sx={{
+                                        width: 8,
+                                        height: 8,
+                                        borderRadius: '50%',
+                                        bgcolor: daemonStatus === 'connected' ? 'success.main' : 'error.main',
+                                        display: 'inline-block',
+                                    }}
+                                />
+                            }
+                            label={daemonStatus === 'connected' ? 'Daemon connected' : 'Daemon offline'}
+                            variant="outlined"
+                            sx={{
+                                borderColor: daemonStatus === 'connected' ? 'success.main' : 'error.main',
+                                color: daemonStatus === 'connected' ? 'success.main' : 'error.main',
+                                fontWeight: 600,
+                                '& .MuiChip-icon': { ml: 1 },
+                            }}
+                        />
                     </Toolbar>
                     <Tabs
                         value={currentTab}
@@ -227,6 +260,10 @@ function App() {
                             recentConnections={history}
                             defaultAction={config.default_action}
                             onSetDefaultAction={handleSetDefaultAction}
+                            daemonStatus={daemonStatus}
+                            onInstallDaemon={async () => {
+                                await window.electron.installDaemon();
+                            }}
                         />
                     )}
                     {currentTab === 1 && (

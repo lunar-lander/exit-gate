@@ -28,4 +28,14 @@ contextBridge.exposeInMainWorld('electron', {
   // Config
   getConfig: () => ipcRenderer.invoke('get-config'),
   setDefaultAction: (action: string) => ipcRenderer.invoke('set-default-action', action),
+
+  // Daemon lifecycle
+  getDaemonStatus: () => ipcRenderer.invoke('get-daemon-status'),
+  onDaemonStatus: (callback: (status: 'connected' | 'disconnected') => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: 'connected' | 'disconnected') =>
+      callback(status);
+    ipcRenderer.on('daemon-status', listener);
+    return () => ipcRenderer.removeListener('daemon-status', listener);
+  },
+  installDaemon: () => ipcRenderer.invoke('install-daemon'),
 });

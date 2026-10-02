@@ -79,6 +79,8 @@ export interface Config {
   default_action: DefaultAction;
 }
 
+export type DaemonStatus = 'connected' | 'disconnected';
+
 export interface DaemonMessage {
   type: string;
   [key: string]: any;
@@ -104,6 +106,9 @@ declare global {
       ) => Promise<void>;
       getConfig: () => Promise<void>;
       setDefaultAction: (action: DefaultAction) => Promise<void>;
+      getDaemonStatus: () => Promise<DaemonStatus>;
+      onDaemonStatus: (callback: (status: DaemonStatus) => void) => () => void;
+      installDaemon: () => Promise<{ success: boolean; code?: number; error?: string }>;
     };
   }
 }
