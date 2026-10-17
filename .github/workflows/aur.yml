@@ -1,0 +1,49 @@
+name: publish-aur
+on:
+  push:
+    tags: ['v*']
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: push to AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        if: env.AUR_SSH_KEY != ''
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          curl -sL -o /tmp/pkg.deb "https://github.com/lunar-lander/exit-gate/releases/download/v${VERSION}/exit-gate-${VERSION}-amd64.deb"
+          curl -sL -o /tmp/LICENSE "https://raw.githubusercontent.com/lunar-lander/exit-gate/v${VERSION}/LICENSE"
+          DEB_SHA=$(sha256sum /tmp/pkg.deb | cut -d' ' -f1)
+          LIC_SHA=$(sha256sum /tmp/LICENSE | cut -d' ' -f1)
+          python3 - "$VERSION" "$DEB_SHA" "$LIC_SHA" <<'PY'
+          import sys
+          v, dsha, lsha = sys.argv[1:4]
+          pb = open('pkg/arch/PKGBUILD').read().splitlines()
+          out, shas = [], False
+          for l in pb:
+              if l.startswith('pkgver='): l = f'pkgver={v}'
+              if l.startswith('sha256sums='): shas = True
+              if shas and l.startswith('    ') and 'SKIP' not in l:
+                  parts = l.split("'")
+                  l = l.replace(parts[1], dsha if dsha not in out_text else lsha) if False else l
+              out.append(l)
+          out_text = '\n'.join(out)
+          out_text = out_text.replace(out[out.index(next(l for l in out if l.startswith('sha256sums=')))+1], f"            '{dsha}')")
+          open('pkg/arch/PKGBUILD','w').write(out_text)
+          PY
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+          rm -rf aur && git clone -q ssh://aur@aur.archlinux.org/exit-gate-bin.git aur
+          sed -e "s/^pkgver=.*/pkgver=${VERSION}/" pkg/arch/PKGBUILD > aur/PKGBUILD
+          sed -e "s/^\tpkgver = .*/\tpkgver = ${VERSION}/" pkg/arch/.SRCINFO > aur/.SRCINFO
+          cd aur
+          git config user.name "ixaxaar"
+          git config user.email "root@ixaxaar.in"
+          git add -A
+          git commit -qm "Update to ${VERSION}" || true
+          git push -q origin master
